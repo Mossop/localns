@@ -1,3 +1,5 @@
+use std::pin::Pin;
+use std::task::Context;
 use std::time::Duration;
 
 use bollard::models::ContainerSummaryInner;
@@ -10,6 +12,7 @@ use tokio::time::timeout;
 use tokio_stream::wrappers::WatchStream;
 
 use crate::config::DockerConfig;
+use crate::debounce::Debounced;
 use crate::ConfigStream;
 
 pub type DockerState = Vec<ContainerSummaryInner>;
@@ -52,12 +55,10 @@ fn connect(config: &Option<DockerConfig>) -> Result<Docker, String> {
 }
 
 async fn fetch_state(docker: &Docker) -> Result<DockerState, String> {
-    let containers = docker
+    docker
         .list_containers::<&str>(None)
         .await
-        .map_err(|e| format!("Failed to list containers: {}", e))?;
-    log::info!("Retrieved {} containers", containers.len());
-    Ok(containers)
+        .map_err(|e| format!("Failed to list containers: {}", e))
 }
 
 pin_project! {
@@ -68,12 +69,10 @@ pin_project! {
 }
 
 impl DockerStateStream {
-    pub fn new(config: ConfigStream) -> DockerStateStream {
+    pub fn new(mut config_stream: Debounced<ConfigStream>) -> Debounced<Self> {
         let (sender, receiver) = watch::channel(None);
 
         tokio::spawn(async move {
-            let mut config_stream = config;
-
             'config: loop {
                 // No config yet
                 let mut config = match config_stream.next().await {
@@ -194,19 +193,19 @@ impl DockerStateStream {
             }
         });
 
-        DockerStateStream {
-            inner: WatchStream::new(receiver),
-        }
+        Debounced::new(
+            DockerStateStream {
+                inner: WatchStream::new(receiver),
+            },
+            Duration::from_millis(1000),
+        )
     }
 }
 
 impl Stream for DockerStateStream {
     type Item = Option<DockerState>;
 
-    fn poll_next(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> std::task::Poll<Option<Self::Item>> {
         let this = self.project();
         this.inner.poll_next(cx)
     }

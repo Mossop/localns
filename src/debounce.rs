@@ -1,108 +1,104 @@
-use std::time::{Duration, Instant};
-
-use futures::future::{AbortHandle, Abortable};
-use tokio::{
-    select,
-    sync::mpsc::{channel, Receiver, Sender},
-    time::sleep,
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
 };
 
-pub struct Debounced {
-    abort: AbortHandle,
-    sender: Sender<()>,
+use futures::{Future, Stream};
+use pin_project_lite::pin_project;
+use tokio::time::{sleep, Sleep};
+
+struct Pending<T> {
+    item: T,
+    delay: Pin<Box<Sleep>>,
 }
 
-fn trigger_delay(
-    first_event: &Instant,
-    delay: &Duration,
-    max_delay: &Option<Duration>,
-) -> Duration {
-    if let Some(max) = max_delay {
-        let current_duration = Instant::now().duration_since(*first_event);
-        if current_duration > *max {
-            return Duration::from_millis(0);
-        }
-
-        let remaining = *max - current_duration;
-        if remaining < *delay {
-            return remaining;
-        }
-    }
-
-    return delay.clone();
-}
-
-async fn debounce_loop<F>(
-    cb: F,
-    mut receiver: Receiver<()>,
-    delay: Duration,
-    max_delay: Option<Duration>,
-) where
-    F: Fn() + Send,
-{
-    log::trace!("Entering debounce loop.");
-
-    loop {
-        log::trace!("Waiting for first trigger.");
-        receiver.recv().await;
-        log::trace!("Received trigger.");
-
-        let first_event = Instant::now();
-
-        loop {
-            let delay = trigger_delay(&first_event, &delay, &max_delay);
-            log::trace!("Delaying for {}ms.", delay.as_millis());
-
-            select! {
-                _ = sleep(delay) => {
-                    log::trace!("Debounce complete.");
-                    cb();
-                    break;
-                }
-                _ = receiver.recv() => {
-                    log::trace!("Received re-trigger.");
-                }
-            }
-        }
-    }
-}
-
-impl Debounced {
-    pub fn new<F>(cb: F, delay: u64, max_delay: Option<u64>) -> Self
+pin_project! {
+    pub struct Debounced<St>
     where
-        F: Fn() + Send + 'static,
+        St: Stream
     {
-        let (abort, registration) = AbortHandle::new_pair();
-        let (sender, receiver) = channel::<()>(2);
-
-        tokio::spawn(async move {
-            Abortable::new(
-                debounce_loop(
-                    cb,
-                    receiver,
-                    Duration::from_millis(delay),
-                    max_delay.map(Duration::from_millis),
-                ),
-                registration,
-            )
-            .await
-        });
-
-        Debounced { abort, sender }
-    }
-
-    pub fn trigger(&self) {
-        let sender = self.sender.clone();
-        tokio::spawn(async move {
-            if let Err(e) = sender.send(()).await {
-                log::error!("Unexpected failure to trigger: {}", e)
-            }
-        });
+        #[pin]
+        inner: St,
+        delay: Duration,
+        last: Option<St::Item>,
+        pending: Option<Pending<St::Item>>,
     }
 }
 
-impl Drop for Debounced {
-    fn drop(&mut self) {
-        self.abort.abort()
+impl<St> Debounced<St>
+where
+    St: Stream,
+{
+    pub fn new(stream: St, delay: Duration) -> Self {
+        Debounced {
+            inner: stream,
+            delay,
+            last: None,
+            pending: None,
+        }
+    }
+}
+
+impl<St> Clone for Debounced<St>
+where
+    St: Stream + Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            delay: self.delay.clone(),
+            last: None,
+            pending: None,
+        }
+    }
+}
+
+impl<St> Stream for Debounced<St>
+where
+    St: Stream,
+    St::Item: PartialEq + Clone,
+{
+    type Item = St::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+
+        match this.inner.poll_next(cx) {
+            Poll::Pending => (),
+            Poll::Ready(Some(value)) => {
+                if let Some(ref last) = this.last {
+                    if last == &value {
+                        // Force the task to re-poll
+                        cx.waker().wake_by_ref();
+                        return Poll::Pending;
+                    }
+                }
+
+                *this.pending = Some(Pending {
+                    item: value.clone(),
+                    delay: Box::pin(sleep(*this.delay)),
+                });
+            }
+            Poll::Ready(None) => {
+                return Poll::Ready(None);
+            }
+        }
+
+        let pending = this.pending.take();
+
+        match pending {
+            Some(mut inner) => match inner.delay.as_mut().poll(cx) {
+                Poll::Ready(_) => {
+                    this.last.replace(inner.item.clone());
+                    Poll::Ready(Some(inner.item))
+                }
+                Poll::Pending => {
+                    *this.pending = Some(inner);
+                    Poll::Pending
+                }
+            },
+            None => Poll::Pending,
+        }
     }
 }

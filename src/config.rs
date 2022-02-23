@@ -6,12 +6,16 @@ use std::{
     env,
     fs::File,
     path::{Path, PathBuf},
+    pin::Pin,
     sync::mpsc::channel,
+    task::Context,
     thread,
     time::Duration,
 };
 use tokio::sync::watch::{self, Receiver};
 use tokio_stream::wrappers::WatchStream;
+
+use crate::debounce::Debounced;
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub struct DockerConfig {
@@ -81,7 +85,7 @@ impl Clone for ConfigStream {
 }
 
 impl ConfigStream {
-    pub fn new(config_file: &Path) -> Self {
+    pub fn new(config_file: &Path) -> Debounced<Self> {
         let config = Config::from_file(config_file);
         let (sender, receiver) = watch::channel(config);
 
@@ -121,21 +125,21 @@ impl ConfigStream {
             log::trace!("Exiting configuration watcher loop.");
         });
 
-        ConfigStream {
-            inner: WatchStream::new(receiver.clone()),
-            receiver,
-            file_watcher,
-        }
+        Debounced::new(
+            ConfigStream {
+                inner: WatchStream::new(receiver.clone()),
+                receiver,
+                file_watcher,
+            },
+            Duration::from_millis(500),
+        )
     }
 }
 
 impl Stream for ConfigStream {
     type Item = Option<Config>;
 
-    fn poll_next(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> std::task::Poll<Option<Self::Item>> {
         let this = self.project();
         this.inner.poll_next(cx)
     }

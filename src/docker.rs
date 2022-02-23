@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::Context;
 use std::time::Duration;
@@ -6,51 +8,81 @@ use bollard::models::ContainerSummaryInner;
 use bollard::{Docker, API_DEFAULT_VERSION};
 use futures::{Stream, StreamExt};
 use pin_project_lite::pin_project;
+use serde::Deserialize;
 use tokio::select;
 use tokio::sync::watch;
 use tokio::time::timeout;
 use tokio_stream::wrappers::WatchStream;
 
-use crate::config::DockerConfig;
 use crate::debounce::Debounced;
 use crate::ConfigStream;
+
+#[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
+pub struct DockerTls {
+    pub address: String,
+    pub private_key: PathBuf,
+    pub certificate: PathBuf,
+    pub ca: PathBuf,
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum DockerConfig {
+    Address(String),
+    Tls(DockerTls),
+}
 
 pub type DockerState = Vec<ContainerSummaryInner>;
 
 const TIMEOUT: u64 = 4;
 
-fn connect(config: &Option<DockerConfig>) -> Result<Docker, String> {
-    log::trace!("Attempting to connect to docker daemon...");
+fn check_file(file: &Path) -> Result<(), String> {
+    let metadata =
+        fs::metadata(file).map_err(|e| format!("Failed to read file {}: {}", file.display(), e))?;
 
-    if let Some(ref docker_config) = config {
-        if docker_config.address.starts_with("/") {
-            Docker::connect_with_local(&docker_config.address, TIMEOUT, API_DEFAULT_VERSION)
-                .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
-        } else if docker_config.address.starts_with("http://") {
-            Docker::connect_with_http(&docker_config.address, TIMEOUT, API_DEFAULT_VERSION)
-                .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
-        } else {
-            if let (Some(ref pkey), Some(ref cert), Some(ref ca)) = (
-                &docker_config.private_key,
-                &docker_config.certificate,
-                &docker_config.ca,
-            ) {
-                Docker::connect_with_ssl(
-                    &docker_config.address,
-                    pkey,
-                    cert,
-                    ca,
-                    TIMEOUT,
-                    API_DEFAULT_VERSION,
-                )
-                .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
+    if !metadata.is_file() {
+        Err(format!("Expected {} to be a file", file.display()))
+    } else {
+        Ok(())
+    }
+}
+
+fn connect(config: &Option<DockerConfig>) -> Result<Docker, String> {
+    match config {
+        Some(DockerConfig::Address(address)) => {
+            if address.starts_with("http://") {
+                log::trace!("Attempting to connect to docker daemon over http...");
+                Docker::connect_with_http(&address, TIMEOUT, API_DEFAULT_VERSION)
+                    .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
             } else {
-                Err(format!("Invalid configuration. Must include ssl keys."))
+                log::trace!("Attempting to connect to docker daemon over local socket...");
+                Docker::connect_with_local(&address, TIMEOUT, API_DEFAULT_VERSION)
+                    .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
             }
         }
-    } else {
-        Docker::connect_with_local_defaults()
+        Some(DockerConfig::Tls(tls_config)) => {
+            log::trace!("Attempting to connect to docker daemon over TLS...");
+
+            check_file(&tls_config.private_key)?;
+            check_file(&tls_config.certificate)?;
+            check_file(&tls_config.ca)?;
+
+            Docker::connect_with_ssl(
+                &tls_config.address,
+                &tls_config.private_key,
+                &tls_config.certificate,
+                &tls_config.ca,
+                TIMEOUT,
+                API_DEFAULT_VERSION,
+            )
             .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
+        }
+        None => {
+            log::trace!("Attempting to connect to local docker daemon...");
+
+            Docker::connect_with_local_defaults()
+                .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
+        }
     }
 }
 

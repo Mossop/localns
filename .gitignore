@@ -1,2 +1,4 @@
 /target
 /*.yaml
+/*.yml
+/*.pem

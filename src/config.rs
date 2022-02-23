@@ -16,15 +16,7 @@ use tokio::sync::watch::{self, Receiver};
 use tokio_stream::wrappers::WatchStream;
 
 use crate::debounce::Debounced;
-
-#[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
-pub struct DockerConfig {
-    pub file: String,
-    pub address: String,
-    pub private_key: Option<PathBuf>,
-    pub certificate: Option<PathBuf>,
-    pub ca: Option<PathBuf>,
-}
+use crate::docker::DockerConfig;
 
 #[derive(Clone, Deserialize, PartialEq, Eq, Debug)]
 pub struct Ttl(u64);
@@ -53,10 +45,7 @@ impl Config {
         };
 
         match serde_yaml::from_reader(f) {
-            Ok(config) => {
-                log::trace!("Parsed configuration: {:?}", config);
-                Some(config)
-            }
+            Ok(config) => Some(config),
             Err(e) => {
                 log::error!("Failed to parse configuration: {}", e);
                 None

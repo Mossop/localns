@@ -1,29 +1,37 @@
-use std::path::PathBuf;
-
-use docker_dns::{Config, DockerListener};
+use docker_dns::{config_file, write_zone, Config, ConfigStream, DockerState, DockerStateStream};
 use flexi_logger::Logger;
-use tokio::{fs::read_to_string, sync::mpsc::channel};
+use futures::StreamExt;
+use tokio::select;
 
 async fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 2 {
-        return Err(format!(
-            "Expected a configuration file command line argument."
-        ));
-    }
 
-    let path = PathBuf::from(args[1].clone());
-    let config_str = read_to_string(&path)
-        .await
-        .map_err(|e| format!("Failed to read config file: {}", e))?;
+    let config_file = config_file(args.get(1).cloned());
+    log::info!("Reading configuration from {}", config_file.display());
 
-    let config = Config::from_str(&config_str)?;
+    let mut config_stream = ConfigStream::new(&config_file);
+    let mut docker_stream = DockerStateStream::new(config_stream.clone());
 
-    let (sender, mut receiver) = channel(32);
-    DockerListener::new(&config, sender);
+    let mut config: Option<Config> = None;
+    let mut docker_state: Option<DockerState> = None;
 
-    while let Some(containers) = receiver.recv().await {
-        log::info!("Received {} containers", containers.len());
+    loop {
+        select! {
+            next = config_stream.next() => match next {
+                Some(new_config) => config = new_config,
+                None => break,
+            },
+            next = docker_stream.next() => match next {
+                Some(new_state) => docker_state = new_state,
+                None => break,
+            }
+        }
+
+        if let (Some(config), Some(state)) = (&config, &docker_state) {
+            if let Err(e) = write_zone(config, state) {
+                log::error!("Failed to write zone: {}", e);
+            }
+        }
     }
 
     Ok(())

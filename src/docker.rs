@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use bollard::models::{ContainerSummaryInner, SystemEventsResponse};
+use bollard::models::SystemEventsResponse;
 use bollard::{Docker, API_DEFAULT_VERSION};
 use futures::{Stream, StreamExt};
 use pin_project_lite::pin_project;
@@ -32,7 +33,30 @@ pub enum DockerConfig {
     Tls(DockerTls),
 }
 
-pub type DockerState = Vec<ContainerSummaryInner>;
+pub type Labels = HashMap<String, String>;
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Network {
+    pub id: String,
+    pub name: String,
+    pub containers: Vec<String>,
+    pub labels: Labels,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Container {
+    pub id: String,
+    pub names: Vec<String>,
+    pub image: String,
+    pub networks: Vec<String>,
+    pub labels: Labels,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct DockerState {
+    pub networks: HashMap<String, Network>,
+    pub containers: HashMap<String, Container>,
+}
 
 const DOCKER_TIMEOUT: u64 = 4;
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -112,10 +136,55 @@ fn connect(config: &Option<DockerConfig>) -> Result<Docker, String> {
 }
 
 async fn fetch_state(docker: &Docker) -> Result<DockerState, String> {
-    docker
+    let mut container_state = docker
         .list_containers::<&str>(None)
         .await
-        .map_err(|e| format!("Failed to list containers: {}", e))
+        .map_err(|e| format!("Failed to list containers: {}", e))?;
+
+    let containers = container_state
+        .drain(..)
+        .filter_map(|state| {
+            let id = state.id?;
+
+            Some((
+                id.clone(),
+                Container {
+                    id,
+                    image: state.image?,
+                    names: state.names?,
+                    networks: state.network_settings?.networks?.keys().cloned().collect(),
+                    labels: state.labels?,
+                },
+            ))
+        })
+        .collect();
+
+    let mut network_state = docker
+        .list_networks::<&str>(None)
+        .await
+        .map_err(|e| format!("Failed to list networks: {}", e))?;
+
+    let networks = network_state
+        .drain(..)
+        .filter_map(|state| {
+            let id = state.id?;
+
+            Some((
+                id.clone(),
+                Network {
+                    id,
+                    name: state.name?,
+                    containers: state.containers?.keys().cloned().collect(),
+                    labels: state.labels?,
+                },
+            ))
+        })
+        .collect();
+
+    Ok(DockerState {
+        networks,
+        containers,
+    })
 }
 
 async fn docker_loop(
@@ -129,9 +198,9 @@ async fn docker_loop(
         .version()
         .await
         .map_err(|e| format!("Failed to get docker version: {}", e))?;
-    match version.version {
-        Some(v) => log::info!("Connected to docker daemon version {}.", v),
-        None => log::info!("Connected to docker daemon."),
+    match (version.version, version.api_version) {
+        (Some(v), Some(a)) => log::info!("Connected to docker daemon version {} (API {:?}).", v, a),
+        _ => log::info!("Connected to docker daemon."),
     }
 
     let state = fetch_state(&docker).await?;

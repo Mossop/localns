@@ -8,6 +8,6 @@ pub use docker::{DockerState, DockerStateStream};
 pub use rfc1035::{RecordData, ResourceRecord};
 
 pub fn write_zone(config: &Config, state: &DockerState) -> Result<(), String> {
-    log::info!("Writing zone...");
+    log::info!("Writing zone from docker state {:?}", state);
     Ok(())
 }

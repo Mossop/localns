@@ -1,10 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::task::Context;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
-use bollard::models::ContainerSummaryInner;
+use bollard::models::{ContainerSummaryInner, SystemEventsResponse};
 use bollard::{Docker, API_DEFAULT_VERSION};
 use futures::{Stream, StreamExt};
 use pin_project_lite::pin_project;
@@ -34,7 +34,9 @@ pub enum DockerConfig {
 
 pub type DockerState = Vec<ContainerSummaryInner>;
 
-const TIMEOUT: u64 = 4;
+const DOCKER_TIMEOUT: u64 = 4;
+const RECONNECT_DELAY: Duration = Duration::from_secs(5);
+const STATE_DEBOUNCE: Duration = Duration::from_millis(500);
 
 fn check_file(file: &Path) -> Result<(), String> {
     let metadata =
@@ -47,16 +49,39 @@ fn check_file(file: &Path) -> Result<(), String> {
     }
 }
 
+fn useful_event(ev: &SystemEventsResponse) -> bool {
+    if let (Some(typ), Some(action)) = (ev.typ.as_deref(), ev.action.as_deref()) {
+        match typ {
+            "container" => {
+                if let Some(pos) = action.find(':') {
+                    match &action[..pos] {
+                        "exec_create" | "exec_start" => false,
+                        _ => true,
+                    }
+                } else {
+                    match action {
+                        "exec_die" => false,
+                        _ => true,
+                    }
+                }
+            }
+            _ => true,
+        }
+    } else {
+        true
+    }
+}
+
 fn connect(config: &Option<DockerConfig>) -> Result<Docker, String> {
     match config {
         Some(DockerConfig::Address(address)) => {
             if address.starts_with("http://") {
                 log::trace!("Attempting to connect to docker daemon over http...");
-                Docker::connect_with_http(&address, TIMEOUT, API_DEFAULT_VERSION)
+                Docker::connect_with_http(&address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)
                     .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
             } else {
                 log::trace!("Attempting to connect to docker daemon over local socket...");
-                Docker::connect_with_local(&address, TIMEOUT, API_DEFAULT_VERSION)
+                Docker::connect_with_local(&address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)
                     .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
             }
         }
@@ -72,7 +97,7 @@ fn connect(config: &Option<DockerConfig>) -> Result<Docker, String> {
                 &tls_config.private_key,
                 &tls_config.certificate,
                 &tls_config.ca,
-                TIMEOUT,
+                DOCKER_TIMEOUT,
                 API_DEFAULT_VERSION,
             )
             .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
@@ -93,151 +118,104 @@ async fn fetch_state(docker: &Docker) -> Result<DockerState, String> {
         .map_err(|e| format!("Failed to list containers: {}", e))
 }
 
+async fn docker_loop(
+    config_stream: &mut ConfigStream,
+    sender: &watch::Sender<Option<DockerState>>,
+) -> Result<(), String> {
+    let config = config_stream.config.docker.clone();
+    let docker = connect(&config)?;
+
+    let version = docker
+        .version()
+        .await
+        .map_err(|e| format!("Failed to get docker version: {}", e))?;
+    match version.version {
+        Some(v) => log::info!("Connected to docker daemon version {}.", v),
+        None => log::info!("Connected to docker daemon."),
+    }
+
+    let state = fetch_state(&docker).await?;
+    sender
+        .send(Some(state))
+        .map_err(|e| format!("Failed to send docker state: {}", e))?;
+
+    let mut events = docker.events::<&str>(None);
+    loop {
+        select! {
+            ev = events.next() => match ev {
+                Some(Ok(ev)) => {
+                    if useful_event(&ev) {
+                        log::trace!("Saw docker event {:?} {:?}", ev.typ, ev.action);
+                        let state = fetch_state(&docker).await?;
+                        sender
+                            .send(Some(state))
+                            .map_err(|e| format!("Failed to send docker state: {}", e))?;
+                    }
+                },
+                Some(Err(e)) => {
+                    log::error!("Docker events stream reported an error: {}", e);
+                    return Ok(());
+                },
+                None => {
+                    log::trace!("Docker events stream hung up.");
+                    return Ok(());
+                }
+            },
+            next = config_stream.next() => match next {
+                Some(new_config) => {
+                    if new_config.docker != config {
+                        // New configuration so reconnect with it.
+                        return Ok(());
+                    } else {
+                        // Otherwise just wait for more events.
+                        continue;
+                    }
+                },
+                None => {
+                    // Config stream closed. Bail out.
+                    return Err(format!("Configuration stream closed."));
+                }
+            }
+        }
+    }
+}
+
 pin_project! {
     pub struct DockerStateStream {
         #[pin]
-        inner: WatchStream<Option<DockerState>>,
+        inner: Debounced<WatchStream<Option<DockerState>>>,
     }
 }
 
 impl DockerStateStream {
-    pub fn new(mut config_stream: Debounced<ConfigStream>) -> Debounced<Self> {
+    pub fn new(mut config_stream: ConfigStream) -> Self {
         let (sender, receiver) = watch::channel(None);
 
         tokio::spawn(async move {
-            'config: loop {
-                // No config yet
-                let mut config = match config_stream.next().await {
-                    Some(Some(config)) => config.docker,
-                    Some(None) => continue 'config,
-                    None => return,
-                };
+            loop {
+                if let Err(e) = docker_loop(&mut config_stream, &sender).await {
+                    log::error!("{}", e);
 
-                'docker: loop {
-                    let docker = match connect(&config) {
-                        Ok(docker) => docker,
-                        Err(e) => {
-                            log::error!("Failed to connect to docker: {}", e);
-
-                            // Watch for a new config or attempt to reconnect to docker.
-                            match timeout(Duration::from_millis(1000), config_stream.next()).await {
-                                Ok(Some(Some(new_config))) => {
-                                    config = new_config.docker;
-                                    // Attempt to reconnect with the new config.
-                                    continue 'docker;
-                                }
-                                Ok(Some(None)) => {
-                                    // Lost the config, wait for a new one.
-                                    continue 'config;
-                                }
-                                Ok(None) => {
-                                    // Config stream closed. Bail out.
-                                    return;
-                                }
-                                Err(_) => {
-                                    // Hit the timeout, try to connect to docker again.
-                                    continue 'docker;
-                                }
-                            }
-                        }
-                    };
-
-                    match docker.version().await {
-                        Ok(version) => match version.version {
-                            Some(v) => log::info!("Connected to docker daemon version {}.", v),
-                            None => log::info!("Connected to docker daemon."),
-                        },
-                        Err(e) => {
-                            log::error!("Failed to get docker version: {}", e);
-                            // Jump back out to wait for a new config on the assumption the docker config
-                            // is bad.
-                            continue 'config;
-                        }
-                    }
-
-                    match fetch_state(&docker).await {
-                        Ok(state) => {
-                            if let Err(e) = sender.send(Some(state)) {
-                                log::error!("Failed to send docker state: {}", e);
-                                return;
-                            }
-                        }
-                        Err(e) => {
-                            log::error!("Failed to collect docker state: {}", e);
-                            // Jump back out to wait for a new config on the assumption the docker config
-                            // is bad.
-                            continue 'config;
-                        }
-                    };
-
-                    let mut events = docker.events::<&str>(None);
-                    loop {
-                        select! {
-                            ev = events.next() => match ev {
-                                Some(Ok(_)) => {
-                                    match fetch_state(&docker).await {
-                                        Ok(state) => {
-                                            if let Err(e) = sender.send(Some(state)) {
-                                                log::error!("Failed to send docker state: {}", e);
-                                                return;
-                                            }
-                                        },
-                                        Err(e) => {
-                                            log::error!("Failed to collect docker state: {}", e);
-                                            // Jump back out to wait for a new config on the assumption the docker config
-                                            // is bad.
-                                            continue 'config;
-                                        }
-                                    };
-                                },
-                                Some(Err(e)) => {
-                                    log::error!("Docker events stream reported an error: {}", e);
-                                    continue 'docker;
-                                },
-                                None => {
-                                    log::trace!("Docker events stream hung up.");
-                                    continue 'docker;
-                                }
-                            },
-                            next = config_stream.next() => match next {
-                                Some(Some(new_config)) => {
-                                    if new_config.docker != config {
-                                        config = new_config.docker;
-                                        // Attempt to reconnect with the new config.
-                                        continue 'docker;
-                                    } else {
-                                        // Otherwise just wait for more events.
-                                        continue;
-                                    }
-                                },
-                                Some(None) => {
-                                    // Lost the config, wait for a new one.
-                                    continue 'config;
-                                },
-                                None => {
-                                    // Config stream closed. Bail out.
-                                    return;
-                                }
-                            }
-                        }
+                    // Attempt to reconnect after a delay but immediately if a new config is
+                    // available.
+                    if let Ok(None) = timeout(RECONNECT_DELAY, config_stream.next()).await {
+                        // Config stream timed out, give up.
+                        return;
                     }
                 }
             }
         });
 
-        Debounced::new(
-            DockerStateStream {
-                inner: WatchStream::new(receiver),
-            },
-            Duration::from_millis(1000),
-        )
+        DockerStateStream {
+            inner: Debounced::new(WatchStream::new(receiver), STATE_DEBOUNCE.clone()),
+        }
     }
 }
 
 impl Stream for DockerStateStream {
     type Item = Option<DockerState>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> std::task::Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         let this = self.project();
         this.inner.poll_next(cx)
     }

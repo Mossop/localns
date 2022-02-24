@@ -1,4 +1,4 @@
-use futures::Stream;
+use futures::{ready, Stream};
 use notify::{watcher, RecommendedWatcher, RecursiveMode, Watcher};
 use pin_project_lite::pin_project;
 use serde::Deserialize;
@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::mpsc::channel,
-    task::Context,
+    task::{Context, Poll},
     thread,
     time::Duration,
 };
@@ -17,6 +17,9 @@ use tokio_stream::wrappers::WatchStream;
 
 use crate::debounce::Debounced;
 use crate::docker::DockerConfig;
+
+const FILE_DEBOUNCE: Duration = Duration::from_millis(500);
+const CONFIG_DEBOUNCE: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Deserialize, PartialEq, Eq, Debug)]
 pub struct Ttl(u64);
@@ -28,27 +31,26 @@ impl Default for Ttl {
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 pub struct Config {
-    pub zone: String,
     #[serde(default)]
     pub ttl: Ttl,
     pub docker: Option<DockerConfig>,
 }
 
 impl Config {
-    pub fn from_file(path: &Path) -> Option<Config> {
+    pub fn from_file(path: &Path) -> Config {
         let f = match File::open(path) {
             Ok(f) => f,
             Err(e) => {
                 log::error!("Failed to open configuration file: {}", e);
-                return None;
+                return Default::default();
             }
         };
 
         match serde_yaml::from_reader(f) {
-            Ok(config) => Some(config),
+            Ok(config) => config,
             Err(e) => {
                 log::error!("Failed to parse configuration: {}", e);
-                None
+                Default::default()
             }
         }
     }
@@ -56,9 +58,10 @@ impl Config {
 
 pin_project! {
     pub struct ConfigStream {
-        receiver: Receiver<Option<Config>>,
+        pub config: Config,
+        receiver: Receiver<Config>,
         #[pin]
-        inner: WatchStream<Option<Config>>,
+        inner: Debounced<WatchStream<Config>>,
         file_watcher: Option<RecommendedWatcher>,
     }
 }
@@ -66,20 +69,24 @@ pin_project! {
 impl Clone for ConfigStream {
     fn clone(&self) -> Self {
         ConfigStream {
+            config: self.config.clone(),
             receiver: self.receiver.clone(),
-            inner: WatchStream::new(self.receiver.clone()),
+            inner: Debounced::new(
+                WatchStream::new(self.receiver.clone()),
+                CONFIG_DEBOUNCE.clone(),
+            ),
             file_watcher: None,
         }
     }
 }
 
 impl ConfigStream {
-    pub fn new(config_file: &Path) -> Debounced<Self> {
+    pub fn new(config_file: &Path) -> Self {
         let config = Config::from_file(config_file);
-        let (sender, receiver) = watch::channel(config);
+        let (sender, receiver) = watch::channel(config.clone());
 
         let (watcher_sender, watcher_receiver) = channel();
-        let file_watcher = match watcher(watcher_sender, Duration::from_millis(500)) {
+        let file_watcher = match watcher(watcher_sender, FILE_DEBOUNCE.clone()) {
             Ok(mut w) => {
                 if let Err(e) = w.watch(config_file, RecursiveMode::NonRecursive) {
                     log::error!("Failed to create config file watcher: {}", e);
@@ -114,23 +121,28 @@ impl ConfigStream {
             log::trace!("Exiting configuration watcher loop.");
         });
 
-        Debounced::new(
-            ConfigStream {
-                inner: WatchStream::new(receiver.clone()),
-                receiver,
-                file_watcher,
-            },
-            Duration::from_millis(500),
-        )
+        ConfigStream {
+            config,
+            inner: Debounced::new(WatchStream::new(receiver.clone()), CONFIG_DEBOUNCE.clone()),
+            receiver,
+            file_watcher,
+        }
     }
 }
 
 impl Stream for ConfigStream {
-    type Item = Option<Config>;
+    type Item = Config;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> std::task::Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         let this = self.project();
-        this.inner.poll_next(cx)
+        let poll_result = ready!(this.inner.poll_next(cx));
+
+        if let Some(config) = poll_result {
+            *this.config = config.clone();
+            Poll::Ready(Some(config))
+        } else {
+            Poll::Ready(None)
+        }
     }
 }
 

@@ -12,7 +12,7 @@ async fn run() -> Result<(), String> {
     let mut config_stream = ConfigStream::new(&config_file);
     let mut docker_stream = DockerStateStream::new(config_stream.clone());
 
-    let mut config: Option<Config> = None;
+    let mut config: Config = config_stream.config.clone();
     let mut docker_state: Option<DockerState> = None;
 
     loop {
@@ -27,8 +27,8 @@ async fn run() -> Result<(), String> {
             }
         }
 
-        if let (Some(config), Some(state)) = (&config, &docker_state) {
-            if let Err(e) = write_zone(config, state) {
+        if let Some(state) = &docker_state {
+            if let Err(e) = write_zone(&config, state) {
                 log::error!("Failed to write zone: {}", e);
             }
         }

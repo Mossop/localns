@@ -1095,7 +1095,7 @@ pub struct Driver {
 
 }
 
-/// EndpointIPAMConfig represents an endpoint's IPAM configuration. 
+/// EndpointIPAMConfig represents an endpoint's IPAM configuration.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EndpointIpamConfig {
     #[serde(rename = "IPv4Address")]
@@ -1985,10 +1985,10 @@ pub struct Ipam {
     #[serde(skip_serializing_if="Option::is_none")]
     pub driver: Option<String>,
 
-    /// List of IPAM configuration options, specified as a map:  ``` {\"Subnet\": <CIDR>, \"IPRange\": <CIDR>, \"Gateway\": <IP address>, \"AuxAddress\": <device_name:IP address>} ``` 
-    #[serde(rename = "Config")]
-    #[serde(skip_serializing_if="Option::is_none")]
-    pub config: Option<Vec<HashMap<String, String>>>,
+    // /// List of IPAM configuration options, specified as a map:  ``` {\"Subnet\": <CIDR>, \"IPRange\": <CIDR>, \"Gateway\": <IP address>, \"AuxAddress\": <device_name:IP address>} ```
+    // #[serde(rename = "Config")]
+    // #[serde(skip_serializing_if="Option::is_none")]
+    // pub config: Option<Vec<HashMap<String, String>>>,
 
     /// Driver-specific options, specified as a map.
     #[serde(rename = "Options")]

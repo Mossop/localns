@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::fs;
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::str::FromStr;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use bollard::models::SystemEventsResponse;
+use bollard::models;
 use bollard::{Docker, API_DEFAULT_VERSION};
 use futures::{Stream, StreamExt};
 use pin_project_lite::pin_project;
@@ -43,13 +45,72 @@ pub struct Network {
     pub labels: Labels,
 }
 
+impl TryFrom<models::Network> for Network {
+    type Error = String;
+
+    fn try_from(state: models::Network) -> Result<Self, Self::Error> {
+        Ok(Network {
+            id: state.id.ok_or(String::from("Missing id"))?,
+            name: state.name.ok_or(String::from("Missing name"))?,
+            containers: match state.containers {
+                Some(containers) => containers.keys().cloned().collect(),
+                None => Vec::new(),
+            },
+            labels: state.labels.unwrap_or(HashMap::new()),
+        })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct ContainerEndpoint {
+    pub network: String,
+    pub ip: Option<Ipv4Addr>,
+}
+
+impl TryFrom<models::EndpointSettings> for ContainerEndpoint {
+    type Error = String;
+
+    fn try_from(state: models::EndpointSettings) -> Result<Self, Self::Error> {
+        Ok(ContainerEndpoint {
+            network: state.network_id.ok_or(String::from("Missing network id"))?,
+            ip: state.ip_address.and_then(|s| Ipv4Addr::from_str(&s).ok()),
+        })
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Container {
     pub id: String,
     pub names: Vec<String>,
-    pub image: String,
-    pub networks: Vec<String>,
+    pub image: Option<String>,
+    pub networks: HashMap<String, ContainerEndpoint>,
     pub labels: Labels,
+}
+
+impl TryFrom<models::ContainerSummaryInner> for Container {
+    type Error = String;
+
+    fn try_from(state: models::ContainerSummaryInner) -> Result<Self, Self::Error> {
+        let networks = match state.network_settings {
+            Some(settings) => match settings.networks {
+                Some(mut networks) => networks
+                    .drain()
+                    .filter_map(|(_, state)| ContainerEndpoint::try_from(state).ok())
+                    .map(|n| (n.network.clone(), n))
+                    .collect(),
+                None => HashMap::new(),
+            },
+            None => HashMap::new(),
+        };
+
+        Ok(Container {
+            id: state.id.ok_or(String::from("Missing id"))?,
+            image: state.image,
+            names: state.names.unwrap_or(Vec::new()),
+            networks,
+            labels: state.labels.unwrap_or(HashMap::new()),
+        })
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -73,7 +134,7 @@ fn check_file(file: &Path) -> Result<(), String> {
     }
 }
 
-fn useful_event(ev: &SystemEventsResponse) -> bool {
+fn useful_event(ev: &models::SystemEventsResponse) -> bool {
     if let (Some(typ), Some(action)) = (ev.typ.as_deref(), ev.action.as_deref()) {
         match typ {
             "container" => {
@@ -144,18 +205,9 @@ async fn fetch_state(docker: &Docker) -> Result<DockerState, String> {
     let containers = container_state
         .drain(..)
         .filter_map(|state| {
-            let id = state.id?;
+            let container: Container = state.try_into().ok()?;
 
-            Some((
-                id.clone(),
-                Container {
-                    id,
-                    image: state.image?,
-                    names: state.names?,
-                    networks: state.network_settings?.networks?.keys().cloned().collect(),
-                    labels: state.labels?,
-                },
-            ))
+            Some((container.id.clone(), container))
         })
         .collect();
 
@@ -167,17 +219,9 @@ async fn fetch_state(docker: &Docker) -> Result<DockerState, String> {
     let networks = network_state
         .drain(..)
         .filter_map(|state| {
-            let id = state.id?;
+            let network: Network = state.try_into().ok()?;
 
-            Some((
-                id.clone(),
-                Network {
-                    id,
-                    name: state.name?,
-                    containers: state.containers?.keys().cloned().collect(),
-                    labels: state.labels?,
-                },
-            ))
+            Some((network.id.clone(), network))
         })
         .collect();
 

@@ -223,6 +223,7 @@ name = "docker-dns"
 version = "0.1.0"
 dependencies = [
  "bollard",
+ "chrono",
  "flexi_logger",
  "futures",
  "log",

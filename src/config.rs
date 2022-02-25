@@ -3,6 +3,7 @@ use notify::{watcher, RecommendedWatcher, RecursiveMode, Watcher};
 use pin_project_lite::pin_project;
 use serde::Deserialize;
 use std::{
+    collections::HashMap,
     env,
     fs::File,
     path::{Path, PathBuf},
@@ -15,25 +16,27 @@ use std::{
 use tokio::sync::watch::{self, Receiver};
 use tokio_stream::wrappers::WatchStream;
 
-use crate::debounce::Debounced;
-use crate::docker::DockerConfig;
+use crate::{debounce::Debounced, docker::Network};
+use crate::{docker::DockerConfig, rfc1035::AbsoluteName};
 
 const FILE_DEBOUNCE: Duration = Duration::from_millis(500);
 const CONFIG_DEBOUNCE: Duration = Duration::from_millis(500);
 
-#[derive(Clone, Deserialize, PartialEq, Eq, Debug)]
-pub struct Ttl(u64);
-impl Default for Ttl {
-    fn default() -> Self {
-        Ttl(300)
-    }
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+pub struct NetworkConfig {
+    pub zone: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 pub struct Config {
-    #[serde(default)]
-    pub ttl: Ttl,
     pub docker: Option<DockerConfig>,
+
+    #[serde(rename = "default-ttl")]
+    pub default_ttl: Option<u32>,
+
+    pub local_address: Option<String>,
+
+    pub networks: HashMap<String, NetworkConfig>,
 }
 
 impl Config {
@@ -53,6 +56,16 @@ impl Config {
                 Default::default()
             }
         }
+    }
+
+    pub fn network_zone(&self, network: &Network) -> Option<AbsoluteName> {
+        if let Some(network_config) = self.networks.get(&network.name) {
+            if let Some(ref zone) = network_config.zone {
+                return Some(zone.into());
+            }
+        }
+
+        network.labels.get("docker-dns.zone").map(|s| s.into())
     }
 }
 

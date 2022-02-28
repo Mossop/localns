@@ -113,7 +113,7 @@ impl Stream for RecordSources {
                         is_new = true;
                         source.current = set.clone();
 
-                        new_set.try_reserve(set.len());
+                        new_set.reserve(set.len());
                         for record in set {
                             new_set.insert(record);
                         }
@@ -123,7 +123,7 @@ impl Stream for RecordSources {
                         is_new = true;
                     }
                     Poll::Pending => {
-                        new_set.try_reserve(source.current.len());
+                        new_set.reserve(source.current.len());
                         for record in source.current.iter() {
                             new_set.insert(record.clone());
                         }

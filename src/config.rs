@@ -19,22 +19,11 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn from_file(path: &Path) -> Config {
-        let f = match File::open(path) {
-            Ok(f) => f,
-            Err(e) => {
-                log::error!("Failed to open configuration file: {}", e);
-                return Default::default();
-            }
-        };
+    pub fn from_file(path: &Path) -> Result<Config, String> {
+        let f =
+            File::open(path).map_err(|e| format!("Failed to open configuration file: {}", e))?;
 
-        match serde_yaml::from_reader(f) {
-            Ok(config) => config,
-            Err(e) => {
-                log::error!("Failed to parse configuration: {}", e);
-                Default::default()
-            }
-        }
+        serde_yaml::from_reader(f).map_err(|e| format!("Failed to parse configuration: {}", e))
     }
 }
 
@@ -44,15 +33,28 @@ pub fn config_stream(config_file: &Path) -> Debounced<ReceiverStream<Config>> {
     let file = config_file.to_owned();
 
     tokio::spawn(async move {
-        loop {
-            let config = Config::from_file(&file);
+        let mut config = Config::from_file(&file);
 
-            if let Err(e) = sender.send(config).await {
-                log::error!("Failed to send updated config: {}", e);
-                return;
+        loop {
+            match config {
+                Ok(ref config) => {
+                    if let Err(e) = sender.send(config.clone()).await {
+                        log::error!("Failed to send updated config: {}", e);
+                        return;
+                    }
+                }
+                Err(ref e) => log::error!("{}", e),
             }
 
-            sleep(Duration::from_millis(500)).await;
+            loop {
+                sleep(Duration::from_millis(500)).await;
+
+                let next_config = Config::from_file(&file);
+                if next_config != config {
+                    config = next_config;
+                    break;
+                }
+            }
         }
     });
 

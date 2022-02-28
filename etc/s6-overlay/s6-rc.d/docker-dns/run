@@ -1,0 +1,3 @@
+#!/command/execlineb -P
+with-contenv
+/bin/docker-dns

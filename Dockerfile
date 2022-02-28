@@ -25,7 +25,8 @@ ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLA
 RUN \
   tar -C / -Jxpf /tmp/s6-overlay-noarch-${S6_OVERLAY_VERSION}.tar.xz && \
   tar -C / -Jxpf /tmp/s6-overlay-x86_64-${S6_OVERLAY_VERSION}.tar.xz && \
-  rm /tmp/*.tar.xz
+  rm /tmp/*.tar.xz && \
+  mkdir -p /etc/zones
 
 COPY --from=go-build /go/bin/coredns /bin/coredns
 COPY --from=rust-build /rust/target/release/docker-dns /bin/docker-dns

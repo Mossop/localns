@@ -71,7 +71,7 @@ impl From<&str> for AbsoluteName {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Hash, Eq, Clone, Debug)]
 pub struct RelativeName {
     pub parts: Vec<String>,
 }
@@ -197,7 +197,6 @@ pub struct ResourceRecord {
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct Zone {
     pub domain: AbsoluteName,
-    pub nameserver: AbsoluteName,
     pub hostmaster: String,
     pub refresh_time: u32,
     pub retry_time: u32,
@@ -208,17 +207,21 @@ pub struct Zone {
 }
 
 impl Zone {
-    pub fn new(domain: &AbsoluteName, nameserver: &AbsoluteName) -> Self {
+    pub fn new(domain: &AbsoluteName, nameserver: &Ipv4Addr) -> Self {
         Zone {
             domain: domain.clone(),
-            nameserver: nameserver.clone(),
             hostmaster: format!("hostmaster.{}", domain),
             refresh_time: 300,
             retry_time: 300,
             expire_time: 300,
             min_ttl: 300,
 
-            records: Vec::new(),
+            records: vec![ResourceRecord {
+                name: Some(RelativeName::new("ns")),
+                class: Class::In,
+                ttl: 300,
+                data: nameserver.clone().into(),
+            }],
         }
     }
 
@@ -231,8 +234,8 @@ impl Zone {
         writeln!(&mut buffer, "$ORIGIN {}", self.domain)?;
         writeln!(
             &mut buffer,
-            "@ 300 SOA {} ({} {} {} {} {} {})",
-            self.nameserver,
+            "@ 300 SOA ns.{} ({} {} {} {} {} {})",
+            self.domain,
             self.hostmaster,
             serial.num_minutes() as u32,
             self.refresh_time,
@@ -250,12 +253,10 @@ impl Zone {
             }
         }
 
-        longest += 8 - (longest % 8);
-
         for record in &self.records {
             writeln!(
                 &mut buffer,
-                "{:width$} {:7} {:7} {}",
+                "{:width$}  {:4} {:4} {}",
                 record
                     .name
                     .as_ref()
@@ -274,48 +275,35 @@ impl Zone {
 }
 
 #[derive(PartialEq, Hash, Eq, Clone, Debug)]
-struct Record {
+pub struct Record {
     pub name: AbsoluteName,
     pub data: RecordData,
 }
 
-#[derive(Default, PartialEq, Eq, Clone, Debug)]
-pub struct Records {
-    records: HashSet<Record>,
-}
+pub type RecordSet = HashSet<Record>;
 
-impl Records {
-    pub fn new() -> Records {
-        Default::default()
-    }
+pub fn zones(records: RecordSet, nameserver: &Ipv4Addr) -> Vec<Zone> {
+    let mut zones: HashMap<AbsoluteName, Zone> = Default::default();
 
-    pub fn add_record(&mut self, name: AbsoluteName, data: RecordData) {
-        self.records.insert(Record { name, data });
-    }
+    for record in records {
+        if let Some((name, domain)) = record.name.split() {
+            let resource = ResourceRecord {
+                name: Some(name.clone()),
+                class: Class::In,
+                ttl: 300,
+                data: record.data.clone(),
+            };
 
-    pub fn zones(&self, nameserver: &AbsoluteName) -> Vec<Zone> {
-        let mut zones: HashMap<AbsoluteName, Zone> = Default::default();
-
-        for record in &self.records {
-            if let Some((name, domain)) = record.name.split() {
-                let resource = ResourceRecord {
-                    name: Some(name.clone()),
-                    class: Class::In,
-                    ttl: 300,
-                    data: record.data.clone(),
-                };
-
-                match zones.get_mut(&domain) {
-                    Some(zone) => zone.records.push(resource),
-                    None => {
-                        let mut zone = Zone::new(&domain, nameserver);
-                        zone.records.push(resource);
-                        zones.insert(domain.clone(), zone);
-                    }
-                };
-            }
+            match zones.get_mut(&domain) {
+                Some(zone) => zone.records.push(resource),
+                None => {
+                    let mut zone = Zone::new(&domain, nameserver);
+                    zone.records.push(resource);
+                    zones.insert(domain.clone(), zone);
+                }
+            };
         }
-
-        zones.into_values().collect()
     }
+
+    zones.into_values().collect()
 }

@@ -40,20 +40,6 @@ where
     }
 }
 
-impl<St> Clone for Debounced<St>
-where
-    St: Stream + Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            delay: self.delay.clone(),
-            last: None,
-            pending: None,
-        }
-    }
-}
-
 impl<St> Stream for Debounced<St>
 where
     St: Stream,

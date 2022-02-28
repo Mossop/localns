@@ -15,7 +15,7 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::{debounce::Debounced, rfc1035::RecordSet};
+use crate::{debounce::Debounced, rfc1035::RecordSet, Config};
 
 use self::docker::docker_source;
 
@@ -61,15 +61,21 @@ pin_project! {
 }
 
 impl RecordSources {
-    pub async fn from_config(config: SourceConfig) -> Self {
+    pub async fn from_config(config: &Config, source_config: &SourceConfig) -> Self {
         let mut sources = Self {
             sources: Vec::new(),
             is_first: true,
         };
 
-        for (name, config) in config.docker {
+        for (name, docker_config) in source_config.docker.iter() {
             log::trace!("Adding docker source {}", name);
-            sources.add_source(docker_source(name, config)).await;
+            sources
+                .add_source(docker_source(
+                    name.clone(),
+                    config.clone(),
+                    docker_config.clone(),
+                ))
+                .await;
         }
 
         sources

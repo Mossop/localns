@@ -14,6 +14,7 @@ use tokio::time::sleep;
 
 use crate::backoff::Backoff;
 use crate::rfc1035::{AbsoluteName, Record, RecordData};
+use crate::Config;
 
 use super::{create_source, RecordSet, RecordSource};
 
@@ -160,8 +161,8 @@ fn useful_event(ev: &models::SystemEventsResponse) -> bool {
     }
 }
 
-fn connect(name: &str, config: &DockerConfig) -> Result<Docker, String> {
-    match config {
+fn connect(name: &str, config: &Config, docker_config: &DockerConfig) -> Result<Docker, String> {
+    match docker_config {
         DockerConfig::Address(address) => {
             if address.starts_with("http://") {
                 log::trace!(
@@ -191,15 +192,18 @@ fn connect(name: &str, config: &DockerConfig) -> Result<Docker, String> {
                 name
             );
 
-            check_file(&tls_config.private_key)?;
-            check_file(&tls_config.certificate)?;
-            check_file(&tls_config.ca)?;
+            let private_key = config.path(&tls_config.private_key);
+            check_file(&private_key)?;
+            let certificate = config.path(&tls_config.certificate);
+            check_file(&certificate)?;
+            let ca = config.path(&tls_config.ca);
+            check_file(&ca)?;
 
             Docker::connect_with_ssl(
                 &tls_config.address,
-                &tls_config.private_key,
-                &tls_config.certificate,
-                &tls_config.ca,
+                &private_key,
+                &certificate,
+                &ca,
                 DOCKER_TIMEOUT,
                 API_DEFAULT_VERSION,
             )
@@ -266,10 +270,11 @@ enum LoopResult {
 
 async fn docker_loop(
     name: &str,
-    config: &DockerConfig,
+    config: &Config,
+    docker_config: &DockerConfig,
     sender: &mpsc::Sender<RecordSet>,
 ) -> LoopResult {
-    let docker = match connect(&name, &config) {
+    let docker = match connect(&name, config, docker_config) {
         Ok(docker) => docker,
         Err(e) => {
             log::error!("({}) {}", name, e);
@@ -348,7 +353,11 @@ async fn docker_loop(
     }
 }
 
-pub(super) fn docker_source(name: String, config: DockerConfig) -> RecordSource {
+pub(super) fn docker_source(
+    name: String,
+    config: Config,
+    docker_config: DockerConfig,
+) -> RecordSource {
     let (sender, registration, source) = create_source();
 
     tokio::spawn(Abortable::new(
@@ -356,7 +365,7 @@ pub(super) fn docker_source(name: String, config: DockerConfig) -> RecordSource 
             let mut backoff = Backoff::default();
 
             loop {
-                match docker_loop(&name, &config, &sender).await {
+                match docker_loop(&name, &config, &docker_config, &sender).await {
                     LoopResult::Backoff => {
                         if let Err(_) = sender.send(HashSet::new()).await {
                             return;

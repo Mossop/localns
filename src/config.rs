@@ -14,16 +14,27 @@ const CONFIG_DEBOUNCE: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 pub struct Config {
+    #[serde(skip)]
+    config_file: PathBuf,
+
     #[serde(default)]
     pub sources: SourceConfig,
 }
 
 impl Config {
     pub fn from_file(path: &Path) -> Result<Config, String> {
-        let f =
-            File::open(path).map_err(|e| format!("Failed to open configuration file: {}", e))?;
+        let f = File::open(path)
+            .map_err(|e| format!("Failed to open file at {}: {}", path.display(), e))?;
 
-        serde_yaml::from_reader(f).map_err(|e| format!("Failed to parse configuration: {}", e))
+        let mut config: Config = serde_yaml::from_reader(f)
+            .map_err(|e| format!("Failed to parse configuration: {}", e))?;
+
+        config.config_file = path.to_owned();
+        Ok(config)
+    }
+
+    pub fn path(&self, path: &Path) -> PathBuf {
+        self.config_file.join(path).canonicalize().unwrap()
     }
 }
 
@@ -40,7 +51,9 @@ pub fn config_stream(config_file: &Path) -> Debounced<ReceiverStream<Config>> {
                 Ok(ref config) => config.clone(),
                 Err(ref e) => {
                     log::error!("{}", e);
-                    Default::default()
+                    let mut config = Config::default();
+                    config.config_file = file.to_owned();
+                    config
                 }
             };
 

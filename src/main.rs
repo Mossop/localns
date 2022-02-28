@@ -20,7 +20,7 @@ async fn run() -> Result<(), String> {
 
     log::trace!("Read initial configuration");
 
-    let mut record_sources = RecordSources::from_config(config.sources.clone()).await;
+    let mut record_sources = RecordSources::from_config(&config, &config.sources).await;
     let mut sigterm = signal(SignalKind::terminate())
         .map_err(|e| format!("Failed to register signal handler: {}", e))?;
 
@@ -31,7 +31,7 @@ async fn run() -> Result<(), String> {
                     log::trace!("Saw updated configuration");
                     config = new_config;
                     record_sources.destroy();
-                    record_sources = RecordSources::from_config(config.sources.clone()).await;
+                    record_sources = RecordSources::from_config(&config, &config.sources.clone()).await;
                 },
                 None => {
                     log::trace!("Config stream ended");

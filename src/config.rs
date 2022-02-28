@@ -36,14 +36,17 @@ pub fn config_stream(config_file: &Path) -> Debounced<ReceiverStream<Config>> {
         let mut config = Config::from_file(&file);
 
         loop {
-            match config {
-                Ok(ref config) => {
-                    if let Err(e) = sender.send(config.clone()).await {
-                        log::error!("Failed to send updated config: {}", e);
-                        return;
-                    }
+            let actual_config = match config {
+                Ok(ref config) => config.clone(),
+                Err(ref e) => {
+                    log::error!("{}", e);
+                    Default::default()
                 }
-                Err(ref e) => log::error!("{}", e),
+            };
+
+            if let Err(e) = sender.send(actual_config).await {
+                log::error!("Failed to send updated config: {}", e);
+                return;
             }
 
             loop {

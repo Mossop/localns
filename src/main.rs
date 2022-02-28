@@ -1,7 +1,10 @@
 use docker_dns::{config_file, config_stream, write_zone, RecordSources};
 use flexi_logger::Logger;
 use futures::StreamExt;
-use tokio::select;
+use tokio::{
+    select,
+    signal::unix::{signal, SignalKind},
+};
 
 async fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
@@ -18,6 +21,8 @@ async fn run() -> Result<(), String> {
     log::trace!("Read initial configuration");
 
     let mut record_sources = RecordSources::from_config(config.sources.clone()).await;
+    let mut sigterm = signal(SignalKind::terminate())
+        .map_err(|e| format!("Failed to register signal handler: {}", e))?;
 
     loop {
         select! {
@@ -38,8 +43,14 @@ async fn run() -> Result<(), String> {
                     log::error!("Failed to write zone: {}", e);
                 }
             }
+            _ = sigterm.recv() => {
+                log::trace!("Saw SIGTERM");
+                break;
+            }
         }
     }
+
+    record_sources.destroy();
 
     Ok(())
 }

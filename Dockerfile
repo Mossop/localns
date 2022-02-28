@@ -3,7 +3,7 @@ FROM golang:alpine as go-build
 RUN \
   apk update && \
   apk add git make patch && \
-  git clone https://github.com/coredns/coredns
+  git clone -b split-horizon https://github.com/Mossop/coredns
 
 RUN \
   cd coredns && \

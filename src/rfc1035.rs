@@ -139,6 +139,7 @@ pub enum RecordData {
     A(Ipv4Addr),
     Aaaa(Ipv6Addr),
     Cname(AbsoluteName),
+    Ns(String),
 }
 
 impl RecordData {
@@ -152,6 +153,9 @@ impl RecordData {
             }
             RecordData::Cname(name) => {
                 format!("CNAME   {}", name)
+            }
+            RecordData::Ns(name) => {
+                format!("NS      {}", name)
             }
         }
     }

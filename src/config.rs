@@ -19,7 +19,7 @@ use crate::{
     debounce::Debounced,
     rfc1035::{AbsoluteName, Class, RecordSet, Zone},
     sources::{docker::DockerConfig, SourceConfig},
-    ResourceRecord,
+    RecordData, ResourceRecord,
 };
 
 const CONFIG_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -195,6 +195,21 @@ impl Config {
                         zones.insert(zone.domain.clone(), zone);
                     }
                 };
+            }
+        }
+
+        let domains: Vec<AbsoluteName> = zones.keys().cloned().collect();
+
+        for domain in domains {
+            if let Some((host, parent_domain)) = domain.split() {
+                if let Some(parent) = zones.get_mut(&parent_domain) {
+                    parent.add_record(ResourceRecord {
+                        name: Some(host),
+                        class: Class::In,
+                        ttl: 300,
+                        data: RecordData::Ns(local_ip.to_string()),
+                    })
+                }
             }
         }
 

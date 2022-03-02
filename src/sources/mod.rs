@@ -19,7 +19,7 @@ use crate::{debounce::Debounced, rfc1035::RecordSet, Config};
 
 use self::docker::docker_source;
 
-mod docker;
+pub mod docker;
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 pub struct SourceConfig {
@@ -61,13 +61,13 @@ pin_project! {
 }
 
 impl RecordSources {
-    pub async fn from_config(config: &Config, source_config: &SourceConfig) -> Self {
+    pub async fn from_config(config: &Config) -> Self {
         let mut sources = Self {
             sources: Vec::new(),
             is_first: true,
         };
 
-        for (name, docker_config) in source_config.docker.iter() {
+        for (name, docker_config) in config.docker_sources() {
             log::trace!("Adding docker source {}", name);
             sources
                 .add_source(docker_source(

@@ -254,6 +254,7 @@ fn generate_records(state: DockerState) -> RecordSet {
         if let Some(hostname) = container.labels.get("docker-dns.hostname") {
             records.insert(Record {
                 name: AbsoluteName::new(hostname),
+                ttl: None,
                 data: RecordData::Cname(AbsoluteName::new("foo")),
             });
         }

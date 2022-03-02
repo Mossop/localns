@@ -277,6 +277,7 @@ impl Zone {
 #[derive(PartialEq, Hash, Eq, Clone, Debug)]
 pub struct Record {
     pub name: AbsoluteName,
+    pub ttl: Option<u32>,
     pub data: RecordData,
 }
 

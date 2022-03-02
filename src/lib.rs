@@ -10,7 +10,7 @@ use std::{
     net::Ipv4Addr,
 };
 
-pub use config::{config_file, config_stream, Config};
+pub use config::{config_stream, Config};
 use rfc1035::RecordSet;
 pub use rfc1035::{RecordData, ResourceRecord};
 pub use sources::RecordSources;

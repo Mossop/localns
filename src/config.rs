@@ -1,8 +1,14 @@
+use local_ip_address::local_ip;
 use serde::Deserialize;
 use std::{
     collections::hash_map::Iter,
+    collections::HashMap,
     env,
+    fmt::Display,
     fs::File,
+    io,
+    io::Write,
+    net::IpAddr,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -11,15 +17,84 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     debounce::Debounced,
+    rfc1035::{AbsoluteName, Class, RecordSet, Zone},
     sources::{docker::DockerConfig, SourceConfig},
+    ResourceRecord,
 };
 
 const CONFIG_DEBOUNCE: Duration = Duration::from_millis(500);
 
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub enum UpstreamProtocol {
+    Tls,
+    Dns,
+}
+
+impl Display for UpstreamProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UpstreamProtocol::Dns => f.pad("dns"),
+            UpstreamProtocol::Tls => f.pad("tls"),
+        }
+    }
+}
+
+impl Default for UpstreamProtocol {
+    fn default() -> Self {
+        UpstreamProtocol::Dns
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct UpstreamConfig {
+    #[serde(default)]
+    pub protocol: UpstreamProtocol,
+    pub address: IpAddr,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum Upstream {
+    IpAddr(IpAddr),
+    Config(UpstreamConfig),
+}
+
+impl Upstream {
+    pub fn write(&self, buf: &mut Vec<u8>) -> io::Result<()> {
+        match self {
+            Upstream::IpAddr(ip) => {
+                writeln!(buf, "  forward . {}", ip)
+            }
+            Upstream::Config(config) => {
+                writeln!(
+                    buf,
+                    "  forward . {}://{} {{",
+                    config.protocol, config.address
+                )?;
+                writeln!(buf, "  }}")
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+struct ZoneConfig {
+    #[serde(default)]
+    upstream: Option<Upstream>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 struct ConfigFile {
+    ip_address: Option<IpAddr>,
+
+    #[serde(default)]
+    pub upstream: Option<Upstream>,
+
     #[serde(default)]
     pub sources: SourceConfig,
+
+    #[serde(default)]
+    pub zones: HashMap<String, ZoneConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,7 +120,11 @@ impl Config {
     }
 
     pub fn path(&self, path: &Path) -> PathBuf {
-        self.config_file.join(path).canonicalize().unwrap()
+        self.config_file.parent().unwrap().join(path)
+    }
+
+    pub fn zone_path(&self, path: &str) -> PathBuf {
+        self.target_dir.join(path)
     }
 
     pub fn default(config_file: &Path, target_dir: &Path) -> Self {
@@ -59,6 +138,68 @@ impl Config {
     pub fn docker_sources(&self) -> Iter<String, DockerConfig> {
         self.config.sources.docker.iter()
     }
+
+    pub fn ip_address(&self) -> Result<IpAddr, String> {
+        if let Some(ip) = self.config.ip_address {
+            Ok(ip)
+        } else {
+            local_ip().map_err(|e| {
+                format!(
+                    "Unable to find local IP address, please specify in config: {}",
+                    e
+                )
+            })
+        }
+    }
+
+    pub fn upstream(&self) -> &Option<Upstream> {
+        &self.config.upstream
+    }
+
+    fn zone(&self, domain: AbsoluteName, local_ip: &IpAddr) -> Zone {
+        let config = self.config.zones.get(&domain.non_absolute());
+
+        Zone::new(domain, local_ip, config.and_then(|c| c.upstream.clone()))
+    }
+
+    pub fn zones(&self, records: RecordSet) -> Vec<Zone> {
+        let local_ip = match self.ip_address() {
+            Ok(ip) => ip,
+            Err(e) => {
+                log::error!("{}", e);
+                return Vec::new();
+            }
+        };
+
+        let mut zones: HashMap<AbsoluteName, Zone> = Default::default();
+
+        for domain in self.config.zones.keys() {
+            let zone = self.zone(domain.into(), &local_ip);
+            zones.insert(zone.domain.clone(), zone);
+        }
+
+        for record in records {
+            if let Some((name, domain)) = record.name.split() {
+                let resource = ResourceRecord {
+                    name: Some(name.clone()),
+                    class: Class::In,
+                    ttl: 300,
+                    data: record.data.clone(),
+                };
+
+                match zones.get_mut(&domain) {
+                    Some(zone) => zone.add_record(resource),
+                    None => {
+                        let mut zone = self.zone(domain, &local_ip);
+                        zone.add_record(resource);
+                        zones.insert(zone.domain.clone(), zone);
+                    }
+                };
+            }
+        }
+
+        zones.into_values().collect()
+    }
 }
 
 pub fn config_stream(args: &Vec<String>) -> Debounced<ReceiverStream<Config>> {
@@ -67,7 +208,11 @@ pub fn config_stream(args: &Vec<String>) -> Debounced<ReceiverStream<Config>> {
     let config_file = config_file(args.get(1));
     let target_dir = target_dir();
 
-    log::info!("Reading configuration from {}", config_file.display());
+    log::info!(
+        "Reading configuration from {}. Writing zones to {}",
+        config_file.display(),
+        target_dir.display()
+    );
 
     tokio::spawn(async move {
         let mut config = Config::from_file(&config_file, &target_dir);
@@ -103,18 +248,18 @@ pub fn config_stream(args: &Vec<String>) -> Debounced<ReceiverStream<Config>> {
 
 fn config_file(arg: Option<&String>) -> PathBuf {
     if let Some(str) = arg {
-        PathBuf::from(str)
+        PathBuf::from(str).canonicalize().unwrap()
     } else if let Ok(value) = env::var("DOCKER_DNS_CONFIG") {
-        PathBuf::from(value)
+        PathBuf::from(value).canonicalize().unwrap()
     } else {
-        PathBuf::from("config.yml")
+        PathBuf::from("config.yml").canonicalize().unwrap()
     }
 }
 
 fn target_dir() -> PathBuf {
     if let Ok(value) = env::var("DOCKER_DNS_ZONE_DIR") {
-        PathBuf::from(value)
+        PathBuf::from(value).canonicalize().unwrap()
     } else {
-        env::current_dir().unwrap()
+        env::current_dir().unwrap().canonicalize().unwrap()
     }
 }

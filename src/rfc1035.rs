@@ -1,13 +1,16 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     fmt::Display,
     io,
     io::Write,
-    net::{Ipv4Addr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    path::Path,
     str::FromStr,
 };
 
 use chrono::{TimeZone, Utc};
+
+use crate::config::Upstream;
 
 #[derive(PartialEq, Hash, Eq, Clone, Debug)]
 pub struct AbsoluteName {
@@ -44,6 +47,10 @@ impl AbsoluteName {
                 },
             ))
         }
+    }
+
+    pub fn non_absolute(&self) -> String {
+        format!("{}", self.parts.join("."))
     }
 }
 
@@ -162,6 +169,15 @@ impl From<Ipv6Addr> for RecordData {
     }
 }
 
+impl From<IpAddr> for RecordData {
+    fn from(ip: IpAddr) -> Self {
+        match ip {
+            IpAddr::V4(ip) => ip.into(),
+            IpAddr::V6(ip) => ip.into(),
+        }
+    }
+}
+
 impl From<AbsoluteName> for RecordData {
     fn from(name: AbsoluteName) -> Self {
         RecordData::Cname(name)
@@ -197,43 +213,74 @@ pub struct ResourceRecord {
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct Zone {
     pub domain: AbsoluteName,
-    pub hostmaster: String,
-    pub refresh_time: u32,
-    pub retry_time: u32,
-    pub expire_time: u32,
-    pub min_ttl: u32,
+    hostmaster: String,
+    refresh_time: u32,
+    retry_time: u32,
+    expire_time: u32,
+    min_ttl: u32,
 
-    pub records: Vec<ResourceRecord>,
+    upstream: Option<Upstream>,
+
+    records: Vec<ResourceRecord>,
 }
 
 impl Zone {
-    pub fn new(domain: &AbsoluteName, nameserver: &Ipv4Addr) -> Self {
+    pub fn new(domain: AbsoluteName, local_ip: &IpAddr, upstream: Option<Upstream>) -> Self {
         Zone {
-            domain: domain.clone(),
             hostmaster: format!("hostmaster.{}", domain),
+            domain,
             refresh_time: 300,
             retry_time: 300,
             expire_time: 300,
             min_ttl: 300,
 
+            upstream: upstream,
+
             records: vec![ResourceRecord {
                 name: Some(RelativeName::new("ns")),
                 class: Class::In,
                 ttl: 300,
-                data: nameserver.clone().into(),
+                data: local_ip.clone().into(),
             }],
         }
     }
 
-    pub fn write(&self, writer: &mut dyn io::Write) -> io::Result<()> {
+    pub fn add_record(&mut self, record: ResourceRecord) {
+        self.records.push(record);
+    }
+
+    pub fn write_core(&self, zone_file: &Path, writer: &mut dyn io::Write) -> io::Result<()> {
+        let mut buffer = Vec::new();
+        let buf = &mut buffer;
+
+        writeln!(buf, "{} {{", self.domain.non_absolute())?;
+
+        match self.upstream {
+            Some(ref upstream) => {
+                writeln!(buf, "  file {} {{", zone_file.display())?;
+                writeln!(buf, "    fallthrough")?;
+                writeln!(buf, "  }}")?;
+                writeln!(buf)?;
+                upstream.write(buf)?;
+            }
+            None => writeln!(buf, "  file {}zone", self.domain)?,
+        }
+        writeln!(buf, "}}")?;
+
+        writer.write_all(&buffer)
+    }
+
+    pub fn write_zone(&self, writer: &mut dyn io::Write) -> io::Result<()> {
         let epoch = Utc.ymd(2000, 1, 1).and_hms(0, 0, 0);
         let now = Utc::now();
         let serial = now - epoch;
 
         let mut buffer = Vec::new();
-        writeln!(&mut buffer, "$ORIGIN {}", self.domain)?;
+        let buf = &mut buffer;
+
+        writeln!(buf, "$ORIGIN {}", self.domain)?;
         writeln!(
-            &mut buffer,
+            buf,
             "@ 300 SOA ns.{} ({} {} {} {} {} {})",
             self.domain,
             self.hostmaster,
@@ -255,7 +302,7 @@ impl Zone {
 
         for record in &self.records {
             writeln!(
-                &mut buffer,
+                buf,
                 "{:width$}  {:4} {:4} {}",
                 record
                     .name
@@ -282,29 +329,3 @@ pub struct Record {
 }
 
 pub type RecordSet = HashSet<Record>;
-
-pub fn zones(records: RecordSet, nameserver: &Ipv4Addr) -> Vec<Zone> {
-    let mut zones: HashMap<AbsoluteName, Zone> = Default::default();
-
-    for record in records {
-        if let Some((name, domain)) = record.name.split() {
-            let resource = ResourceRecord {
-                name: Some(name.clone()),
-                class: Class::In,
-                ttl: 300,
-                data: record.data.clone(),
-            };
-
-            match zones.get_mut(&domain) {
-                Some(zone) => zone.records.push(resource),
-                None => {
-                    let mut zone = Zone::new(&domain, nameserver);
-                    zone.records.push(resource);
-                    zones.insert(domain.clone(), zone);
-                }
-            };
-        }
-    }
-
-    zones.into_values().collect()
-}

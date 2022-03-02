@@ -32,7 +32,8 @@ COPY --from=go-build /go/bin/coredns /bin/coredns
 COPY --from=rust-build /rust/target/release/docker-dns /bin/docker-dns
 COPY etc /etc/
 
-ENV DOCKER_DNS_CONFIG=/etc/docker-dns.yml
+ENV DOCKER_DNS_CONFIG=/etc/docker-dns/config.yml
+ENV DOCKER_DNS_ZONE_DIR=/etc/zones
 EXPOSE 53/tcp
 EXPOSE 53/udp
 

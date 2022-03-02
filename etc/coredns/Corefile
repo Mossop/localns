@@ -1,0 +1,6 @@
+import /etc/zones/*.core
+
+# dummy zone to allow automatic reloading.
+nowhere.dockerdns {
+  reload 10s
+}

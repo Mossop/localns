@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use docker_dns::{config_stream, write_zone, RecordSources};
+use docker_dns::{config_stream, write_root_zone, write_zone, RecordSources};
 use flexi_logger::Logger;
 use futures::{join, StreamExt};
 use tokio::{
@@ -48,8 +48,14 @@ async fn run() -> Result<(), String> {
                 },
             },
             Some(records) = record_sources.next() => {
-                if let Err(e) = write_zone(&config, records) {
-                    log::error!("Failed to write zone: {}", e);
+                if let Err(e) = write_root_zone(&config) {
+                    log::error!("Failed to write root zone: {}", e);
+                }
+
+                for zone in config.zones(records) {
+                    if let Err(e) = write_zone(&config, &zone) {
+                        log::error!("Failed to write zone: {}", e);
+                    }
                 }
             }
             _ = sigterm.recv() => {

@@ -62,7 +62,7 @@ where
                 }
 
                 *this.pending = Some(Pending {
-                    item: value.clone(),
+                    item: value,
                     delay: Box::pin(sleep(*this.delay)),
                 });
             }

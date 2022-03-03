@@ -22,7 +22,7 @@ impl AbsoluteName {
         AbsoluteName {
             parts: name
                 .trim_end_matches('.')
-                .split(".")
+                .split('.')
                 .map(|s| s.to_owned())
                 .collect(),
         }
@@ -50,7 +50,7 @@ impl AbsoluteName {
     }
 
     pub fn non_absolute(&self) -> String {
-        format!("{}", self.parts.join("."))
+        self.parts.join(".")
     }
 }
 
@@ -88,7 +88,7 @@ impl RelativeName {
         RelativeName {
             parts: name
                 .trim_end_matches('.')
-                .split(".")
+                .split('.')
                 .map(|s| s.to_owned())
                 .collect(),
         }
@@ -238,13 +238,13 @@ impl Zone {
             expire_time: 300,
             min_ttl: 300,
 
-            upstream: upstream,
+            upstream,
 
             records: vec![ResourceRecord {
                 name: Some(RelativeName::new("ns")),
                 class: Class::In,
                 ttl: 300,
-                data: local_ip.clone().into(),
+                data: (*local_ip).into(),
             }],
         }
     }

@@ -220,9 +220,9 @@ impl Config {
     }
 }
 
-pub fn config_stream(args: &Vec<String>) -> Debounced<ReceiverStream<Config>> {
+pub fn config_stream(args: &[String]) -> Debounced<ReceiverStream<Config>> {
     let (sender, receiver) = mpsc::channel(5);
-    let stream = Debounced::new(ReceiverStream::new(receiver), CONFIG_DEBOUNCE.clone());
+    let stream = Debounced::new(ReceiverStream::new(receiver), CONFIG_DEBOUNCE);
     let config_file = config_file(args.get(1));
     let target_dir = target_dir();
 

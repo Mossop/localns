@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use flexi_logger::Logger;
 use futures::{join, StreamExt};
@@ -8,7 +8,7 @@ use tokio::{
     signal::unix::{signal, SignalKind},
 };
 
-async fn clean_dir(_dir: &PathBuf) -> Result<(), String> {
+async fn clean_dir(_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 

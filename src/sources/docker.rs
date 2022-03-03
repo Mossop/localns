@@ -52,10 +52,10 @@ impl TryFrom<models::Network> for Network {
 
     fn try_from(state: models::Network) -> Result<Self, Self::Error> {
         Ok(Network {
-            id: state.id.ok_or(String::from("Missing id"))?,
-            name: state.name.ok_or(String::from("Missing name"))?,
+            id: state.id.ok_or_else(|| String::from("Missing id"))?,
+            name: state.name.ok_or_else(|| String::from("Missing name"))?,
             driver: state.driver,
-            labels: state.labels.unwrap_or(HashMap::new()),
+            labels: state.labels.unwrap_or_default(),
         })
     }
 }
@@ -71,10 +71,12 @@ impl ContainerEndpoint {
         state: models::EndpointSettings,
         networks: &HashMap<String, Network>,
     ) -> Result<Self, String> {
-        let network_id = state.network_id.ok_or(String::from("Missing network id"))?;
+        let network_id = state
+            .network_id
+            .ok_or_else(|| String::from("Missing network id"))?;
         let network = networks
             .get(&network_id)
-            .ok_or(String::from("Unknown network"))?;
+            .ok_or_else(|| String::from("Unknown network"))?;
 
         Ok(ContainerEndpoint {
             network: network.clone(),
@@ -110,11 +112,11 @@ impl Container {
         };
 
         Ok(Container {
-            id: state.id.ok_or(String::from("Missing id"))?,
+            id: state.id.ok_or_else(|| String::from("Missing id"))?,
             image: state.image,
-            names: state.names.unwrap_or(Vec::new()),
+            names: state.names.unwrap_or_default(),
             networks: container_networks,
-            labels: state.labels.unwrap_or(HashMap::new()),
+            labels: state.labels.unwrap_or_default(),
         })
     }
 }
@@ -139,22 +141,11 @@ fn check_file(file: &Path) -> Result<(), String> {
 }
 
 fn useful_event(ev: &models::SystemEventsResponse) -> bool {
-    if let (Some(typ), Some(action)) = (ev.typ.as_deref(), ev.action.as_deref()) {
-        match typ {
-            "container" => {
-                if let Some(pos) = action.find(':') {
-                    match &action[..pos] {
-                        "exec_create" | "exec_start" => false,
-                        _ => true,
-                    }
-                } else {
-                    match action {
-                        "exec_die" => false,
-                        _ => true,
-                    }
-                }
-            }
-            _ => true,
+    if let (Some("container"), Some(action)) = (ev.typ.as_deref(), ev.action.as_deref()) {
+        if let Some(pos) = action.find(':') {
+            !matches!(&action[..pos], "exec_create" | "exec_start")
+        } else {
+            !matches!(action, "exec_die")
         }
     } else {
         true
@@ -169,14 +160,14 @@ fn connect(name: &str, config: &Config, docker_config: &DockerConfig) -> Result<
                     "({}) Attempting to connect to docker daemon over http...",
                     name
                 );
-                Docker::connect_with_http(&address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)
+                Docker::connect_with_http(address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)
                     .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
             } else {
                 log::trace!(
                     "({}) Attempting to connect to docker daemon over local socket...",
                     name
                 );
-                Docker::connect_with_local(&address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)
+                Docker::connect_with_local(address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)
                     .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
             }
         }
@@ -275,7 +266,7 @@ async fn docker_loop(
     docker_config: &DockerConfig,
     sender: &mpsc::Sender<RecordSet>,
 ) -> LoopResult {
-    let docker = match connect(&name, config, docker_config) {
+    let docker = match connect(name, config, docker_config) {
         Ok(docker) => docker,
         Err(e) => {
             log::error!("({}) {}", name, e);
@@ -310,11 +301,7 @@ async fn docker_loop(
     };
 
     let records = generate_records(state);
-    if let Err(_) = sender
-        .send(records)
-        .await
-        .map_err(|e| format!("Failed to send records: {}", e))
-    {
+    if sender.send(records).await.is_err() {
         return LoopResult::Quit;
     }
 
@@ -333,11 +320,7 @@ async fn docker_loop(
                     };
 
                     let records = generate_records(state);
-                    if let Err(_) = sender
-                        .send(records)
-                        .await
-                        .map_err(|e| format!("Failed to send records: {}", e))
-                    {
+                    if sender.send(records).await.is_err() {
                         return LoopResult::Quit;
                     }
                 }
@@ -368,7 +351,7 @@ pub(super) fn docker_source(
             loop {
                 match docker_loop(&name, &config, &docker_config, &sender).await {
                     LoopResult::Backoff => {
-                        if let Err(_) = sender.send(HashSet::new()).await {
+                        if sender.send(HashSet::new()).await.is_err() {
                             return;
                         }
 

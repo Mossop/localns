@@ -32,7 +32,7 @@ COPY --from=go-build /go/bin/coredns /bin/coredns
 COPY --from=rust-build /rust/target/release/localns /bin/localns
 COPY etc /etc/
 
-ENV LOCALNS_CONFIG=/etc/localns/config.yml
+ENV LOCALNS_CONFIG=/etc/localns/config.yaml
 ENV LOCALNS_ZONE_DIR=/etc/zones
 EXPOSE 53/tcp
 EXPOSE 53/udp

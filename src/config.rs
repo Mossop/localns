@@ -81,6 +81,9 @@ impl Upstream {
 struct ZoneConfig {
     #[serde(default)]
     upstream: Option<Upstream>,
+
+    #[serde(default)]
+    authoratative: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
@@ -267,7 +270,7 @@ fn config_file(arg: Option<&String>) -> PathBuf {
     } else if let Ok(value) = env::var("LOCALNS_CONFIG") {
         PathBuf::from(value).canonicalize().unwrap()
     } else {
-        PathBuf::from("config.yml").canonicalize().unwrap()
+        PathBuf::from("config.yaml").canonicalize().unwrap()
     }
 }
 

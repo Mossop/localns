@@ -225,23 +225,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "docker-dns"
-version = "0.1.0"
-dependencies = [
- "bollard",
- "chrono",
- "flexi_logger",
- "futures",
- "local-ip-address",
- "log",
- "pin-project-lite",
- "serde",
- "serde_yaml",
- "tokio",
- "tokio-stream",
-]
-
-[[package]]
 name = "flexi_logger"
 version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -579,6 +562,23 @@ dependencies = [
  "neli",
  "thiserror",
  "windows",
+]
+
+[[package]]
+name = "localns"
+version = "0.1.0"
+dependencies = [
+ "bollard",
+ "chrono",
+ "flexi_logger",
+ "futures",
+ "local-ip-address",
+ "log",
+ "pin-project-lite",
+ "serde",
+ "serde_yaml",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

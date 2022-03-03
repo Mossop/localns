@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use docker_dns::{config_stream, write_root_zone, write_zone, RecordSources};
 use flexi_logger::Logger;
 use futures::{join, StreamExt};
+use localns::{config_stream, write_root_zone, write_zone, RecordSources};
 use tokio::{
     select,
     signal::unix::{signal, SignalKind},

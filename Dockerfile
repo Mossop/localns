@@ -29,11 +29,11 @@ RUN \
   mkdir -p /etc/zones
 
 COPY --from=go-build /go/bin/coredns /bin/coredns
-COPY --from=rust-build /rust/target/release/docker-dns /bin/docker-dns
+COPY --from=rust-build /rust/target/release/localns /bin/localns
 COPY etc /etc/
 
-ENV DOCKER_DNS_CONFIG=/etc/docker-dns/config.yml
-ENV DOCKER_DNS_ZONE_DIR=/etc/zones
+ENV LOCALNS_CONFIG=/etc/localns/config.yml
+ENV LOCALNS_ZONE_DIR=/etc/zones
 EXPOSE 53/tcp
 EXPOSE 53/udp
 

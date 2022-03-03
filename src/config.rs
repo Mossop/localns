@@ -264,7 +264,7 @@ pub fn config_stream(args: &Vec<String>) -> Debounced<ReceiverStream<Config>> {
 fn config_file(arg: Option<&String>) -> PathBuf {
     if let Some(str) = arg {
         PathBuf::from(str).canonicalize().unwrap()
-    } else if let Ok(value) = env::var("DOCKER_DNS_CONFIG") {
+    } else if let Ok(value) = env::var("LOCALNS_CONFIG") {
         PathBuf::from(value).canonicalize().unwrap()
     } else {
         PathBuf::from("config.yml").canonicalize().unwrap()
@@ -272,7 +272,7 @@ fn config_file(arg: Option<&String>) -> PathBuf {
 }
 
 fn target_dir() -> PathBuf {
-    if let Ok(value) = env::var("DOCKER_DNS_ZONE_DIR") {
+    if let Ok(value) = env::var("LOCALNS_ZONE_DIR") {
         PathBuf::from(value).canonicalize().unwrap()
     } else {
         env::current_dir().unwrap().canonicalize().unwrap()

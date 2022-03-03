@@ -251,7 +251,7 @@ fn generate_records(state: DockerState) -> RecordSet {
     let mut records = HashSet::new();
 
     for container in state.containers.values() {
-        if let Some(hostname) = container.labels.get("docker-dns.hostname") {
+        if let Some(hostname) = container.labels.get("localns.hostname") {
             records.insert(Record {
                 name: AbsoluteName::new(hostname),
                 ttl: None,

@@ -17,7 +17,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     debounce::Debounced,
-    rfc1035::{AbsoluteName, Class, RecordSet, Zone},
+    rfc1035::{AbsoluteName, Address, Class, RecordSet, Zone},
     sources::{docker::DockerConfig, SourceConfig},
     RecordData, ResourceRecord,
 };
@@ -210,7 +210,7 @@ impl Config {
                         name: Some(host),
                         class: Class::In,
                         ttl: 300,
-                        data: RecordData::Ns(local_ip.to_string()),
+                        data: RecordData::Ns(Address::from(local_ip)),
                     })
                 }
             }

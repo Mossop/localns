@@ -123,6 +123,95 @@ impl From<&str> for RelativeName {
     }
 }
 
+#[derive(PartialEq, Hash, Eq, Clone, Debug)]
+pub enum Address {
+    Name(AbsoluteName),
+    V4(Ipv4Addr),
+    V6(Ipv6Addr),
+}
+
+impl From<AbsoluteName> for Address {
+    fn from(name: AbsoluteName) -> Self {
+        Address::Name(name)
+    }
+}
+
+impl From<&AbsoluteName> for Address {
+    fn from(name: &AbsoluteName) -> Self {
+        Address::Name(name.clone())
+    }
+}
+
+impl From<Ipv4Addr> for Address {
+    fn from(ip: Ipv4Addr) -> Self {
+        Address::V4(ip)
+    }
+}
+
+impl From<&Ipv4Addr> for Address {
+    fn from(ip: &Ipv4Addr) -> Self {
+        Address::V4(*ip)
+    }
+}
+
+impl From<Ipv6Addr> for Address {
+    fn from(ip: Ipv6Addr) -> Self {
+        Address::V6(ip)
+    }
+}
+
+impl From<&Ipv6Addr> for Address {
+    fn from(ip: &Ipv6Addr) -> Self {
+        Address::V6(*ip)
+    }
+}
+
+impl From<IpAddr> for Address {
+    fn from(ip: IpAddr) -> Self {
+        Self::from(&ip)
+    }
+}
+
+impl From<&IpAddr> for Address {
+    fn from(ip: &IpAddr) -> Self {
+        match ip {
+            IpAddr::V4(ip) => Self::from(ip),
+            IpAddr::V6(ip) => Self::from(ip),
+        }
+    }
+}
+
+impl From<String> for Address {
+    fn from(name: String) -> Self {
+        Self::from(name.as_str())
+    }
+}
+
+impl From<&String> for Address {
+    fn from(name: &String) -> Self {
+        Self::from(name.as_str())
+    }
+}
+
+impl From<&str> for Address {
+    fn from(name: &str) -> Self {
+        match IpAddr::from_str(name) {
+            Ok(ip) => Self::from(ip),
+            Err(_) => AbsoluteName::new(name).into(),
+        }
+    }
+}
+
+impl Display for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Address::Name(name) => f.pad(&name.non_absolute()),
+            Address::V4(ip) => f.pad(&ip.to_string()),
+            Address::V6(ip) => f.pad(&ip.to_string()),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub enum Class {
     In,
@@ -139,7 +228,7 @@ pub enum RecordData {
     A(Ipv4Addr),
     Aaaa(Ipv6Addr),
     Cname(AbsoluteName),
-    Ns(String),
+    Ns(Address),
 }
 
 impl RecordData {

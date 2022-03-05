@@ -1,3 +1,4 @@
+use futures::StreamExt;
 use local_ip_address::local_ip;
 use serde::Deserialize;
 use std::{
@@ -12,13 +13,14 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use tokio::{sync::mpsc, time::sleep};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     debounce::Debounced,
     rfc1035::{AbsoluteName, Address, Class, RecordSet, Zone},
     sources::{docker::DockerConfig, traefik::TraefikConfig, SourceConfig},
+    watcher::watch,
     RecordData, ResourceRecord,
 };
 
@@ -238,6 +240,7 @@ pub fn config_stream(args: &[String]) -> Debounced<ReceiverStream<Config>> {
 
     tokio::spawn(async move {
         let mut config = Config::from_file(&config_file, &target_dir);
+        let mut file_stream = watch(&config_file).unwrap();
 
         loop {
             let actual_config = match config {
@@ -254,7 +257,7 @@ pub fn config_stream(args: &[String]) -> Debounced<ReceiverStream<Config>> {
             }
 
             loop {
-                sleep(Duration::from_millis(500)).await;
+                file_stream.next().await;
 
                 let next_config = Config::from_file(&config_file, &target_dir);
                 if next_config != config {

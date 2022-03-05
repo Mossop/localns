@@ -3,6 +3,7 @@ mod config;
 mod debounce;
 mod rfc1035;
 mod sources;
+mod watcher;
 
 use std::{
     fs::File,

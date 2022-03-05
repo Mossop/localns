@@ -18,6 +18,7 @@ pin-project-lite = "^0.2.8"
 chrono = "^0.4.19"
 local-ip-address = "^0.4.4"
 reqwest = { version = "^0.11.9", features = ["json"] }
+notify = "^4.0.17"
 
 [patch.crates-io]
 bollard-stubs = { path = "bollard-stubs" }

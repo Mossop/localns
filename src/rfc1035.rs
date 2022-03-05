@@ -9,6 +9,7 @@ use std::{
 };
 
 use chrono::{TimeZone, Utc};
+use serde::Deserialize;
 
 use crate::config::Upstream;
 
@@ -123,7 +124,8 @@ impl From<&str> for RelativeName {
     }
 }
 
-#[derive(PartialEq, Hash, Eq, Clone, Debug)]
+#[derive(PartialEq, Hash, Eq, Clone, Deserialize, Debug)]
+#[serde(from = "String")]
 pub enum Address {
     Name(AbsoluteName),
     V4(Ipv4Addr),
@@ -274,6 +276,16 @@ impl From<IpAddr> for RecordData {
 impl From<AbsoluteName> for RecordData {
     fn from(name: AbsoluteName) -> Self {
         RecordData::Cname(name)
+    }
+}
+
+impl From<Address> for RecordData {
+    fn from(addr: Address) -> Self {
+        match addr {
+            Address::Name(name) => name.into(),
+            Address::V4(ip) => ip.into(),
+            Address::V6(ip) => ip.into(),
+        }
     }
 }
 

@@ -15,16 +15,18 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::{debounce::Debounced, rfc1035::RecordSet, Config};
-
-use self::docker::docker_source;
+use crate::{config::Config, debounce::Debounced, rfc1035::RecordSet};
 
 pub mod docker;
+pub mod traefik;
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 pub struct SourceConfig {
     #[serde(default)]
     pub docker: HashMap<String, docker::DockerConfig>,
+
+    #[serde(default)]
+    pub traefik: HashMap<String, traefik::TraefikConfig>,
 }
 
 pub struct RecordSource {
@@ -70,10 +72,21 @@ impl RecordSources {
         for (name, docker_config) in config.docker_sources() {
             log::trace!("Adding docker source {}", name);
             sources
-                .add_source(docker_source(
+                .add_source(docker::source(
                     name.clone(),
                     config.clone(),
                     docker_config.clone(),
+                ))
+                .await;
+        }
+
+        for (name, traefik_config) in config.traefik_sources() {
+            log::trace!("Adding traefik source {}", name);
+            sources
+                .add_source(traefik::source(
+                    name.clone(),
+                    config.clone(),
+                    traefik_config.clone(),
                 ))
                 .await;
         }

@@ -12,9 +12,11 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 
-use crate::backoff::Backoff;
-use crate::rfc1035::{AbsoluteName, Record, RecordData};
-use crate::Config;
+use crate::{
+    backoff::Backoff,
+    config::Config,
+    rfc1035::{AbsoluteName, Address, Record, RecordData},
+};
 
 use super::{create_source, RecordSet, RecordSource};
 
@@ -23,7 +25,7 @@ pub struct DockerLocal {}
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub struct DockerTls {
-    pub address: String,
+    pub address: Address,
     pub private_key: PathBuf,
     pub certificate: PathBuf,
     pub ca: PathBuf,
@@ -191,7 +193,7 @@ fn connect(name: &str, config: &Config, docker_config: &DockerConfig) -> Result<
             check_file(&ca)?;
 
             Docker::connect_with_ssl(
-                &tls_config.address,
+                &tls_config.address.to_string(),
                 &private_key,
                 &certificate,
                 &ca,
@@ -384,11 +386,7 @@ async fn docker_loop(
     }
 }
 
-pub(super) fn docker_source(
-    name: String,
-    config: Config,
-    docker_config: DockerConfig,
-) -> RecordSource {
+pub(super) fn source(name: String, config: Config, docker_config: DockerConfig) -> RecordSource {
     let (sender, registration, source) = create_source();
 
     tokio::spawn(Abortable::new(

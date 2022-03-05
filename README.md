@@ -60,6 +60,11 @@ Serves records based on docker containers. Once connected to a docker server
 it watches for containers to start and stop. Any containers with the label
 `localns.hostname` have a DNS record generated.
 
+### traefik
+
+Connects to a [Traefik](https://doc.traefik.io/traefik/) instance and creates
+host records for all of the known http services.
+
 ## Why not just write a CoreDNS plugin?
 
 A lot of the idea of this project was inspired by CoreDNS. A server with

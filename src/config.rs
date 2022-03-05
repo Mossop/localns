@@ -18,7 +18,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::{
     debounce::Debounced,
     rfc1035::{AbsoluteName, Address, Class, RecordSet, Zone},
-    sources::{docker::DockerConfig, SourceConfig},
+    sources::{docker::DockerConfig, traefik::TraefikConfig, SourceConfig},
     RecordData, ResourceRecord,
 };
 
@@ -140,6 +140,10 @@ impl Config {
 
     pub fn docker_sources(&self) -> Iter<String, DockerConfig> {
         self.config.sources.docker.iter()
+    }
+
+    pub fn traefik_sources(&self) -> Iter<String, TraefikConfig> {
+        self.config.sources.traefik.iter()
     }
 
     pub fn ip_address(&self) -> Result<IpAddr, String> {

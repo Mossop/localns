@@ -238,16 +238,63 @@ async fn fetch_state(docker: &Docker) -> Result<DockerState, String> {
     })
 }
 
-fn generate_records(state: DockerState) -> RecordSet {
+fn visible_networks(state: &DockerState) -> HashSet<String> {
+    state
+        .networks
+        .iter()
+        .filter_map(|(k, network)| {
+            if let Some(ref driver) = network.driver {
+                match driver.as_str() {
+                    "host" | "macvlan" | "ipvlan" => Some(k.to_owned()),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn generate_records(name: &str, state: DockerState) -> RecordSet {
     let mut records = HashSet::new();
+
+    let networks = visible_networks(&state);
 
     for container in state.containers.values() {
         if let Some(hostname) = container.labels.get("localns.hostname") {
-            records.insert(Record {
-                name: AbsoluteName::new(hostname),
-                ttl: None,
-                data: RecordData::Cname(AbsoluteName::new("foo")),
-            });
+            let possible_ips: Vec<Ipv4Addr> = container
+                .networks
+                .values()
+                .filter_map(|endpoint| {
+                    if networks.contains(&endpoint.network.id) {
+                        endpoint.ip
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if let Some(ip) = possible_ips.get(0) {
+                if possible_ips.len() > 1 {
+                    log::warn!(
+                        "({}) Cannot add record for {} as it is present on multiple possible networks.",
+                        name,
+                        hostname
+                    );
+                } else {
+                    records.insert(Record {
+                        name: AbsoluteName::new(hostname),
+                        ttl: None,
+                        data: RecordData::A(*ip),
+                    });
+                }
+            } else {
+                log::warn!(
+                    "({}) Cannot add record for {} as none of its networks appeared usable.",
+                    name,
+                    hostname
+                );
+            }
         }
     }
 
@@ -300,7 +347,7 @@ async fn docker_loop(
         }
     };
 
-    let records = generate_records(state);
+    let records = generate_records(name, state);
     if sender.send(records).await.is_err() {
         return LoopResult::Quit;
     }
@@ -319,7 +366,7 @@ async fn docker_loop(
                         }
                     };
 
-                    let records = generate_records(state);
+                    let records = generate_records(name, state);
                     if sender.send(records).await.is_err() {
                         return LoopResult::Quit;
                     }

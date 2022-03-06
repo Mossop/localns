@@ -17,6 +17,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{config::Config, debounce::Debounced, rfc1035::RecordSet};
 
+pub mod dhcp;
 pub mod docker;
 pub mod traefik;
 
@@ -27,6 +28,9 @@ pub struct SourceConfig {
 
     #[serde(default)]
     pub traefik: HashMap<String, traefik::TraefikConfig>,
+
+    #[serde(default)]
+    pub dhcp: HashMap<String, dhcp::DhcpConfig>,
 }
 
 pub struct RecordSource {
@@ -87,6 +91,17 @@ impl RecordSources {
                     name.clone(),
                     config.clone(),
                     traefik_config.clone(),
+                ))
+                .await;
+        }
+
+        for (name, dhcp_config) in config.dhcp_sources() {
+            log::trace!("Adding dhcp source {}", name);
+            sources
+                .add_source(dhcp::source(
+                    name.clone(),
+                    config.clone(),
+                    dhcp_config.clone(),
                 ))
                 .await;
         }

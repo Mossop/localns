@@ -65,6 +65,11 @@ it watches for containers to start and stop. Any containers with the label
 Connects to a [Traefik](https://doc.traefik.io/traefik/) instance and creates
 host records for all of the known http services.
 
+### dhcp
+
+Attempts to read hosts from a dhcp lease file (currently dnsmasq format is
+supported).
+
 ## Why not just write a CoreDNS plugin?
 
 A lot of the idea of this project was inspired by CoreDNS. A server with

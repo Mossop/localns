@@ -13,7 +13,8 @@ use serde::Deserialize;
 
 use crate::config::Upstream;
 
-#[derive(PartialEq, Hash, Eq, Clone, Debug)]
+#[derive(PartialEq, Hash, Eq, Clone, Deserialize, Debug)]
+#[serde(from = "String")]
 pub struct AbsoluteName {
     parts: Vec<String>,
 }

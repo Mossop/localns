@@ -18,10 +18,10 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     debounce::Debounced,
-    rfc1035::{AbsoluteName, Address, Class, RecordSet, Zone},
+    rfc1035::{AbsoluteName, Address, Class, RecordData, RecordSet, ResourceRecord, Zone},
+    server::ServerConfig,
     sources::{dhcp::DhcpConfig, docker::DockerConfig, traefik::TraefikConfig, SourceConfig},
     watcher::watch,
-    RecordData, ResourceRecord,
 };
 
 const CONFIG_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -96,6 +96,9 @@ struct ConfigFile {
     pub upstream: Option<Upstream>,
 
     #[serde(default)]
+    pub server: ServerConfig,
+
+    #[serde(default)]
     pub sources: SourceConfig,
 
     #[serde(default)]
@@ -138,6 +141,10 @@ impl Config {
             target_dir: target_dir.to_owned(),
             config: ConfigFile::default(),
         }
+    }
+
+    pub fn server_config(&self) -> &ServerConfig {
+        &self.config.server
     }
 
     pub fn docker_sources(&self) -> Iter<String, DockerConfig> {

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use flexi_logger::Logger;
 use futures::{join, StreamExt};
-use localns::{config_stream, write_root_zone, write_zone, RecordSources};
+use localns::{config_stream, RecordSources, Server};
 use tokio::{
     select,
     signal::unix::{signal, SignalKind},
@@ -33,6 +33,8 @@ async fn run() -> Result<(), String> {
     let mut sigterm = signal(SignalKind::terminate())
         .map_err(|e| format!("Failed to register signal handler: {}", e))?;
 
+    let mut server = Server::new(config.server_config()).await;
+
     loop {
         select! {
             next = config_stream.next() => match next {
@@ -41,6 +43,8 @@ async fn run() -> Result<(), String> {
                     config = new_config;
                     record_sources.destroy();
                     record_sources = RecordSources::from_config(&config).await;
+
+                    server.update_config(config.server_config()).await;
                 },
                 None => {
                     log::trace!("Config stream ended");
@@ -48,15 +52,7 @@ async fn run() -> Result<(), String> {
                 },
             },
             Some(records) = record_sources.next() => {
-                if let Err(e) = write_root_zone(&config) {
-                    log::error!("Failed to write root zone: {}", e);
-                }
-
-                for zone in config.zones(records) {
-                    if let Err(e) = write_zone(&config, &zone) {
-                        log::error!("Failed to write zone: {}", e);
-                    }
-                }
+                server.update_records(records).await;
             }
             _ = sigterm.recv() => {
                 log::trace!("Saw SIGTERM");

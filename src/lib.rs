@@ -2,6 +2,7 @@ mod backoff;
 mod config;
 mod debounce;
 mod rfc1035;
+mod server;
 mod sources;
 mod watcher;
 
@@ -10,9 +11,10 @@ use std::{
     io::{self, BufWriter, Write},
 };
 
-pub use config::{config_stream, Config};
+pub use config::config_stream;
+use config::Config;
 use rfc1035::Zone;
-pub use rfc1035::{RecordData, ResourceRecord};
+pub use server::Server;
 pub use sources::RecordSources;
 
 fn root_zone_write(config: &Config, writer: &mut dyn io::Write) -> io::Result<()> {

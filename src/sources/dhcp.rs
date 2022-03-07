@@ -9,9 +9,8 @@ use tokio::fs::read_to_string;
 
 use crate::{
     config::Config,
-    rfc1035::{AbsoluteName, Record, RecordSet},
+    rfc1035::{AbsoluteName, Record, RecordData, RecordSet},
     watcher::{watch, FileEvent},
-    RecordData,
 };
 
 use super::{create_source, RecordSource};
@@ -78,6 +77,7 @@ pub(super) fn source(name: String, config: Config, dhcp_config: DhcpConfig) -> R
             let records = if lease_file.exists() {
                 parse_file(&name, &dhcp_config, &lease_file).await
             } else {
+                log::warn!("({}) dhcp file {} is missing.", name, lease_file.display());
                 RecordSet::new()
             };
 
@@ -95,7 +95,10 @@ pub(super) fn source(name: String, config: Config, dhcp_config: DhcpConfig) -> R
 
             while let Some(ev) = stream.next().await {
                 let records = match ev {
-                    FileEvent::Delete => HashSet::new(),
+                    FileEvent::Delete => {
+                        log::warn!("({}) dhcp file {} is missing.", name, lease_file.display());
+                        HashSet::new()
+                    }
                     _ => parse_file(&name, &dhcp_config, &lease_file).await,
                 };
 

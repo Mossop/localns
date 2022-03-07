@@ -1,88 +1,66 @@
 use futures::StreamExt;
 use local_ip_address::local_ip;
-use serde::Deserialize;
+use serde::{
+    de::{self, Visitor},
+    Deserialize, Deserializer,
+};
 use std::{
     collections::hash_map::Iter,
     collections::HashMap,
-    env,
-    fmt::Display,
+    env, fmt,
     fs::File,
-    io,
-    io::Write,
     net::IpAddr,
     path::{Path, PathBuf},
     time::Duration,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
+use trust_dns_server::resolver::Name;
 
 use crate::{
     debounce::Debounced,
-    rfc1035::{AbsoluteName, Address, Class, RecordData, RecordSet, ResourceRecord, Zone},
-    server::ServerConfig,
+    record::RecordSet,
+    server::{ServerConfig, Zone},
     sources::{dhcp::DhcpConfig, docker::DockerConfig, traefik::TraefikConfig, SourceConfig},
+    upstream::{Upstream, UpstreamConfig},
     watcher::watch,
 };
 
 const CONFIG_DEBOUNCE: Duration = Duration::from_millis(500);
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub enum UpstreamProtocol {
-    Tls,
-    Dns,
-}
+struct NameVisitor;
 
-impl Display for UpstreamProtocol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            UpstreamProtocol::Dns => f.pad("dns"),
-            UpstreamProtocol::Tls => f.pad("tls"),
-        }
+impl<'de> Visitor<'de> for NameVisitor {
+    type Value = Name;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "a string")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Name::parse(value, None)
+            .map(|mut n| {
+                n.set_fqdn(true);
+                n
+            })
+            .map_err(|e| E::custom(format!("{}", e)))
     }
 }
 
-impl Default for UpstreamProtocol {
-    fn default() -> Self {
-        UpstreamProtocol::Dns
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub struct UpstreamConfig {
-    #[serde(default)]
-    pub protocol: UpstreamProtocol,
-    pub address: IpAddr,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-#[serde(untagged)]
-pub enum Upstream {
-    IpAddr(IpAddr),
-    Config(UpstreamConfig),
-}
-
-impl Upstream {
-    pub fn write(&self, buf: &mut Vec<u8>) -> io::Result<()> {
-        match self {
-            Upstream::IpAddr(ip) => {
-                writeln!(buf, "  forward . {}", ip)
-            }
-            Upstream::Config(config) => {
-                writeln!(
-                    buf,
-                    "  forward . {}://{} {{",
-                    config.protocol, config.address
-                )?;
-                writeln!(buf, "  }}")
-            }
-        }
-    }
+pub fn deserialize_fqdn<'de, D>(de: D) -> Result<Name, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    de.deserialize_str(NameVisitor)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 struct ZoneConfig {
     #[serde(default)]
-    upstream: Option<Upstream>,
+    upstream: Option<UpstreamConfig>,
 
     #[serde(default)]
     authoratative: bool,
@@ -93,7 +71,7 @@ struct ConfigFile {
     ip_address: Option<IpAddr>,
 
     #[serde(default)]
-    pub upstream: Option<Upstream>,
+    pub upstream: Option<UpstreamConfig>,
 
     #[serde(default)]
     pub server: ServerConfig,
@@ -108,12 +86,11 @@ struct ConfigFile {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
     pub config_file: PathBuf,
-    pub target_dir: PathBuf,
     config: ConfigFile,
 }
 
 impl Config {
-    pub fn from_file(config_file: &Path, target_dir: &Path) -> Result<Config, String> {
+    pub fn from_file(config_file: &Path) -> Result<Config, String> {
         let f = File::open(config_file)
             .map_err(|e| format!("Failed to open file at {}: {}", config_file.display(), e))?;
 
@@ -122,7 +99,6 @@ impl Config {
 
         Ok(Config {
             config_file: config_file.to_owned(),
-            target_dir: target_dir.to_owned(),
             config,
         })
     }
@@ -131,14 +107,9 @@ impl Config {
         self.config_file.parent().unwrap().join(path)
     }
 
-    pub fn zone_path(&self, path: &str) -> PathBuf {
-        self.target_dir.join(path)
-    }
-
-    pub fn default(config_file: &Path, target_dir: &Path) -> Self {
+    pub fn default(config_file: &Path) -> Self {
         Config {
             config_file: config_file.to_owned(),
-            target_dir: target_dir.to_owned(),
             config: ConfigFile::default(),
         }
     }
@@ -172,65 +143,51 @@ impl Config {
         }
     }
 
-    pub fn upstream(&self) -> &Option<Upstream> {
+    pub fn upstream(&self) -> &Option<UpstreamConfig> {
         &self.config.upstream
     }
 
-    fn zone(&self, domain: AbsoluteName, local_ip: &IpAddr) -> Zone {
-        let config = self.config.zones.get(&domain.non_absolute());
+    fn zone(&self, domain: Name) -> Zone {
+        let name = domain.to_string();
+        let fqdn = String::from(name.trim_end_matches('.'));
 
-        Zone::new(domain, local_ip, config.and_then(|c| c.upstream.clone()))
+        let config = self.config.zones.get(&fqdn);
+        let upstream_config = match config {
+            Some(c) => {
+                if c.authoratative {
+                    None
+                } else {
+                    c.upstream.as_ref().or(self.config.upstream.as_ref())
+                }
+            }
+            None => self.config.upstream.as_ref(),
+        };
+
+        let upstream = upstream_config.map(|c| Upstream::new(&domain.to_string(), c));
+
+        Zone::new(domain, upstream)
     }
 
     pub fn zones(&self, records: RecordSet) -> Vec<Zone> {
-        let local_ip = match self.ip_address() {
-            Ok(ip) => ip,
-            Err(e) => {
-                log::error!("{}", e);
-                return Vec::new();
-            }
-        };
-
-        let mut zones: HashMap<AbsoluteName, Zone> = Default::default();
+        let mut zones: HashMap<Name, Zone> = Default::default();
 
         for domain in self.config.zones.keys() {
-            let zone = self.zone(domain.into(), &local_ip);
-            zones.insert(zone.domain.clone(), zone);
+            let name = Name::parse(&format!("{}.", domain), None).unwrap();
+            let zone = self.zone(name.clone());
+            zones.insert(name, zone);
         }
 
         for record in records {
-            if let Some((name, domain)) = record.name.split() {
-                let resource = ResourceRecord {
-                    name: Some(name.clone()),
-                    class: Class::In,
-                    ttl: 300,
-                    data: record.data.clone(),
-                };
+            let domain = record.name.trim_to((record.name.num_labels() - 1).into());
 
-                match zones.get_mut(&domain) {
-                    Some(zone) => zone.add_record(resource),
-                    None => {
-                        let mut zone = self.zone(domain, &local_ip);
-                        zone.add_record(resource);
-                        zones.insert(zone.domain.clone(), zone);
-                    }
-                };
-            }
-        }
-
-        let domains: Vec<AbsoluteName> = zones.keys().cloned().collect();
-
-        for domain in domains {
-            if let Some((host, parent_domain)) = domain.split() {
-                if let Some(parent) = zones.get_mut(&parent_domain) {
-                    parent.add_record(ResourceRecord {
-                        name: Some(host),
-                        class: Class::In,
-                        ttl: 300,
-                        data: RecordData::Ns(Address::from(local_ip)),
-                    })
+            match zones.get_mut(&domain) {
+                Some(zone) => zone.insert(record),
+                None => {
+                    let mut zone = self.zone(domain.clone());
+                    zone.insert(record);
+                    zones.insert(domain, zone);
                 }
-            }
+            };
         }
 
         zones.into_values().collect()
@@ -241,16 +198,11 @@ pub fn config_stream(args: &[String]) -> Debounced<ReceiverStream<Config>> {
     let (sender, receiver) = mpsc::channel(5);
     let stream = Debounced::new(ReceiverStream::new(receiver), CONFIG_DEBOUNCE);
     let config_file = config_file(args.get(1));
-    let target_dir = target_dir();
 
-    log::info!(
-        "Reading configuration from {}. Writing zones to {}",
-        config_file.display(),
-        target_dir.display()
-    );
+    log::info!("Reading configuration from {}.", config_file.display(),);
 
     tokio::spawn(async move {
-        let mut config = Config::from_file(&config_file, &target_dir);
+        let mut config = Config::from_file(&config_file);
         let mut file_stream = watch(&config_file).unwrap();
 
         loop {
@@ -258,7 +210,7 @@ pub fn config_stream(args: &[String]) -> Debounced<ReceiverStream<Config>> {
                 Ok(ref config) => config.clone(),
                 Err(ref e) => {
                     log::error!("{}", e);
-                    Config::default(&config_file, &target_dir)
+                    Config::default(&config_file)
                 }
             };
 
@@ -270,7 +222,7 @@ pub fn config_stream(args: &[String]) -> Debounced<ReceiverStream<Config>> {
             loop {
                 file_stream.next().await;
 
-                let next_config = Config::from_file(&config_file, &target_dir);
+                let next_config = Config::from_file(&config_file);
                 if next_config != config {
                     config = next_config;
                     break;
@@ -289,13 +241,5 @@ fn config_file(arg: Option<&String>) -> PathBuf {
         PathBuf::from(value).canonicalize().unwrap()
     } else {
         PathBuf::from("config.yaml").canonicalize().unwrap()
-    }
-}
-
-fn target_dir() -> PathBuf {
-    if let Ok(value) = env::var("LOCALNS_ZONE_DIR") {
-        PathBuf::from(value).canonicalize().unwrap()
-    } else {
-        env::current_dir().unwrap().canonicalize().unwrap()
     }
 }

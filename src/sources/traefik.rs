@@ -1,22 +1,23 @@
-use std::{collections::HashSet, time::Duration};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use futures::future::Abortable;
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Deserialize};
 use tokio::{sync::mpsc, time::sleep};
+use trust_dns_server::resolver::Name;
 
 use crate::{
     backoff::Backoff,
     config::Config,
-    rfc1035::{AbsoluteName, Address, Record, RecordSet},
+    record::{fqdn, rdata, Record, RecordSet},
 };
 
 use super::{create_source, RecordSource};
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub struct TraefikConfig {
-    address: Address,
+    address: String,
 
     #[serde(default)]
     url: Option<String>,
@@ -67,7 +68,7 @@ where
     }
 }
 
-fn parse_hosts(rule: &str) -> Result<Vec<AbsoluteName>, String> {
+fn parse_hosts(rule: &str) -> Result<Vec<Name>, String> {
     #[derive(Debug, PartialEq, Eq)]
     enum State {
         Pre,
@@ -97,13 +98,13 @@ fn parse_hosts(rule: &str) -> Result<Vec<AbsoluteName>, String> {
             }
 
             (State::Backtick(st), '`') => {
-                hosts.push(st.into());
+                hosts.push(fqdn(&st));
                 State::Post
             }
             (State::Backtick(st), ch) => State::Backtick(format!("{}{}", st, ch)),
 
             (State::Quote(st), '"') => {
-                hosts.push(st.into());
+                hosts.push(fqdn(&st));
                 State::Post
             }
             (State::Quote(st), '\\') => State::EscapedQuote(st),
@@ -150,11 +151,7 @@ fn generate_records(
             }
         })
         .flatten()
-        .map(|name| Record {
-            name,
-            ttl: None,
-            data: traefik_config.address.clone().into(),
-        })
+        .map(|name| Record::new(name, rdata(&traefik_config.address)))
         .collect()
 }
 
@@ -220,7 +217,7 @@ pub(super) fn source(name: String, config: Config, traefik_config: TraefikConfig
             loop {
                 match traefik_loop(&name, &config, &traefik_config, &client, &sender).await {
                     LoopResult::Backoff => {
-                        if sender.send(HashSet::new()).await.is_err() {
+                        if sender.send(RecordSet::new()).await.is_err() {
                             return;
                         }
 

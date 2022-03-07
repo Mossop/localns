@@ -1,34 +1,27 @@
 use std::{collections::HashMap, sync::Arc};
 
-use tokio::net::TcpStream;
 use trust_dns_server::{
     authority::{
         AuthLookup, Authority, LookupError, LookupOptions, LookupRecords, MessageRequest,
         UpdateResult, ZoneType,
     },
     client::{
-        client::{AsyncClient, ClientHandle},
         op::{Query, ResponseCode},
-        rr::{rdata, LowerName, Name, RData, Record, RecordSet, RecordType},
-        tcp::TcpClientStream,
+        rr::{self, rdata, LowerName, Name, RData, RecordSet, RecordType},
     },
-    proto::iocompat::AsyncIoTokioAsStd,
     server::RequestInfo,
     store::in_memory::InMemoryAuthority,
 };
 
-async fn connect_client() -> AsyncClient {
-    let address = "10.10.14.253:53".parse().unwrap();
-    let (stream, sender) = TcpClientStream::<AsyncIoTokioAsStd<TcpStream>>::new(address);
+use crate::{
+    record::Record,
+    upstream::{Upstream, UpstreamResponse},
+};
 
-    let client = AsyncClient::new(stream, sender, None);
-    let (client, bg) = client.await.expect("connection failed");
-    tokio::spawn(bg);
-
-    client
-}
-
-fn records_to_set(records: Vec<Record>, lookup_options: LookupOptions) -> Option<LookupRecords> {
+fn records_to_set(
+    records: Vec<rr::Record>,
+    lookup_options: LookupOptions,
+) -> Option<LookupRecords> {
     let mut sets: HashMap<(Name, RecordType), RecordSet> = HashMap::new();
 
     for record in records {
@@ -55,39 +48,31 @@ fn records_to_set(records: Vec<Record>, lookup_options: LookupOptions) -> Option
     }
 }
 
-async fn lookup(query: Query, lookup_options: LookupOptions) -> Option<AuthLookup> {
-    log::debug!("Forwarding query for {} upstream", query.name());
-    let mut client = connect_client().await;
-
-    let (answers, additionals) = match client
-        .query(
-            query.name().clone(),
-            query.query_class(),
-            query.query_type(),
-        )
-        .await
-    {
-        Ok(mut response) => (response.take_answers(), response.take_additionals()),
-        Err(e) => {
-            log::warn!("Upstream DNS server returned error: {}", e);
-            return None;
-        }
-    };
-
-    records_to_set(answers, lookup_options).map(|answers| AuthLookup::Records {
+fn lookup_from_response(
+    response: UpstreamResponse,
+    lookup_options: LookupOptions,
+) -> Option<AuthLookup> {
+    records_to_set(response.answers, lookup_options).map(|answers| AuthLookup::Records {
         answers,
-        additionals: records_to_set(additionals, lookup_options),
+        additionals: records_to_set(response.additionals, lookup_options),
     })
 }
 
-pub struct SemiAuthoritativeAuthority {
+pub struct Zone {
     inner: InMemoryAuthority,
+    upstream: Option<Upstream>,
     serial: u32,
 }
 
-impl SemiAuthoritativeAuthority {
-    pub async fn new(origin: Name) -> Self {
-        let mut inner = InMemoryAuthority::empty(origin.clone(), ZoneType::Primary, false);
+impl Zone {
+    pub fn new(origin: Name, upstream: Option<Upstream>) -> Self {
+        let inner = InMemoryAuthority::empty(origin.clone(), ZoneType::Primary, false);
+
+        let mut this = Self {
+            inner,
+            upstream,
+            serial: 1,
+        };
 
         let soa = rdata::SOA::new(
             Name::parse("ns", Some(&origin)).unwrap(),
@@ -98,20 +83,32 @@ impl SemiAuthoritativeAuthority {
             300,
             300,
         );
-        let record = Record::from_rdata(origin, 300, RData::SOA(soa));
-        inner.upsert_mut(record, 1);
 
-        Self { inner, serial: 1 }
+        this.insert(Record::new(origin, RData::SOA(soa)));
+        this
     }
 
     pub fn insert(&mut self, record: Record) {
+        let rr = rr::Record::from_rdata(record.name, record.ttl.unwrap_or(300), record.data);
+
         self.serial += 1;
-        self.inner.upsert_mut(record, self.serial);
+        self.inner.upsert_mut(rr, self.serial);
+    }
+
+    async fn upstream(&self, query: Query, lookup_options: LookupOptions) -> Option<AuthLookup> {
+        if let Some(ref upstream) = self.upstream {
+            upstream
+                .lookup(query)
+                .await
+                .and_then(|r| lookup_from_response(r, lookup_options))
+        } else {
+            None
+        }
     }
 }
 
 #[async_trait::async_trait]
-impl Authority for SemiAuthoritativeAuthority {
+impl Authority for Zone {
     type Lookup = AuthLookup;
 
     fn zone_type(&self) -> ZoneType {
@@ -141,7 +138,7 @@ impl Authority for SemiAuthoritativeAuthority {
             Err(error) => {
                 if error.is_nx_domain() {
                     let query = Query::query(name.into(), query_type);
-                    lookup(query, lookup_options).await.ok_or(error)
+                    self.upstream(query, lookup_options).await.ok_or(error)
                 } else {
                     Err(error)
                 }
@@ -160,7 +157,7 @@ impl Authority for SemiAuthoritativeAuthority {
             Ok(lookup) => Ok(lookup),
             Err(error) => {
                 if error.is_nx_domain() {
-                    lookup(query, lookup_options).await.ok_or(error)
+                    self.upstream(query, lookup_options).await.ok_or(error)
                 } else {
                     Err(error)
                 }

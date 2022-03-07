@@ -42,6 +42,7 @@ impl Handler {
             .await
         {
             Ok(lookup) => {
+                log::trace!("Server responded with {:?}", lookup);
                 response_handle
                     .send_response(MessageResponseBuilder::from_message_request(request).build(
                         *request.header(),

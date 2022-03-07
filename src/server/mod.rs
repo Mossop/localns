@@ -1,27 +1,31 @@
-use std::{mem::replace, net::Ipv4Addr, sync::Arc};
+use std::{collections::HashSet, mem::replace, sync::Arc};
 
 use serde::Deserialize;
 use tokio::{net::UdpSocket, sync::Mutex};
 use trust_dns_server::{
     authority::{Authority, Catalog},
-    client::rr::{Name, RData, Record},
+    client::rr::LowerName,
     resolver::TokioAsyncResolver,
     ServerFuture,
 };
 
-mod authority;
 mod handler;
+mod zone;
 
-use crate::rfc1035::RecordSet;
+use crate::{config::Config, record::RecordSet};
 
-use self::{authority::SemiAuthoritativeAuthority, handler::Handler};
+use self::handler::Handler;
+
+pub use zone::Zone;
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 pub struct ServerConfig {}
 
 pub struct Server {
-    config: ServerConfig,
+    config: Config,
     records: RecordSet,
+    current_zones: HashSet<LowerName>,
+
     dns_server: ServerFuture<Handler>,
 
     catalog: Arc<Mutex<Catalog>>,
@@ -34,24 +38,28 @@ async fn apply_config(server: &mut ServerFuture<Handler>, _config: &ServerConfig
     }
 }
 
-async fn apply_records(catalog: &mut Catalog, _records: RecordSet) {
-    let origin = Name::parse("oxymoronical.com.", None).unwrap();
-    let mut authority = SemiAuthoritativeAuthority::new(origin.clone()).await;
+async fn apply_records(
+    config: &Config,
+    catalog: &mut Catalog,
+    mut previous_names: HashSet<LowerName>,
+    records: RecordSet,
+) -> HashSet<LowerName> {
+    let mut names = HashSet::new();
 
-    let record = Record::from_rdata(
-        Name::parse("www", Some(&origin)).unwrap(),
-        300,
-        RData::A(Ipv4Addr::new(10, 10, 10, 10)),
-    );
-    authority.insert(record);
+    for zone in config.zones(records) {
+        names.insert(zone.origin().clone());
+        previous_names.remove(&zone.origin().clone());
 
-    catalog.upsert(authority.origin().clone(), Box::new(Arc::new(authority)));
+        catalog.upsert(zone.origin().clone(), Box::new(Arc::new(zone)));
+    }
+
+    names
 }
 
 impl Server {
-    pub async fn new(config: &ServerConfig) -> Self {
+    pub async fn new(config: &Config) -> Self {
         let mut catalog = Catalog::new();
-        apply_records(&mut catalog, RecordSet::new()).await;
+        let names = apply_records(config, &mut catalog, HashSet::new(), RecordSet::new()).await;
         let locked = Arc::new(Mutex::new(catalog));
 
         let handler = Handler {
@@ -60,18 +68,29 @@ impl Server {
         };
 
         let mut dns_server = ServerFuture::new(handler);
-        apply_config(&mut dns_server, config).await;
+        apply_config(&mut dns_server, config.server_config()).await;
 
         Server {
-            config: config.to_owned(),
+            config: config.clone(),
             records: RecordSet::new(),
+            current_zones: names,
             dns_server,
             catalog: locked,
         }
     }
 
-    pub async fn update_config(&mut self, config: &ServerConfig) {
-        if self.config == *config {
+    pub async fn update_config(&mut self, config: &Config) {
+        let mut catalog = self.catalog.lock().await;
+        let names = apply_records(
+            config,
+            &mut catalog,
+            self.current_zones.clone(),
+            self.records.clone(),
+        )
+        .await;
+        self.current_zones = names;
+
+        if self.config.server_config() == config.server_config() {
             return;
         }
 
@@ -89,7 +108,7 @@ impl Server {
             log::error!("Error waiting for DNS server to shutdown: {}", e);
         }
 
-        apply_config(&mut self.dns_server, config).await;
+        apply_config(&mut self.dns_server, self.config.server_config()).await;
     }
 
     pub async fn update_records(&mut self, records: RecordSet) {
@@ -97,7 +116,16 @@ impl Server {
             return;
         }
 
+        self.records = records.clone();
+
         let mut catalog = self.catalog.lock().await;
-        apply_records(&mut catalog, records).await;
+        let names = apply_records(
+            &self.config,
+            &mut catalog,
+            self.current_zones.clone(),
+            records,
+        )
+        .await;
+        self.current_zones = names;
     }
 }

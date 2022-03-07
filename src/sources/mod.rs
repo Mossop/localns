@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    collections::HashSet,
     pin::Pin,
     task::{Context, Poll},
     time::Duration,
@@ -8,14 +7,14 @@ use std::{
 
 use futures::{
     future::{AbortHandle, AbortRegistration},
-    Stream, StreamExt,
+    stream::{Stream, StreamExt},
 };
 use pin_project_lite::pin_project;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::{config::Config, debounce::Debounced, rfc1035::RecordSet};
+use crate::{config::Config, debounce::Debounced, record::RecordSet};
 
 pub mod dhcp;
 pub mod docker;
@@ -119,7 +118,7 @@ impl RecordSources {
             None => self.sources.push(Item {
                 source,
                 finished: true,
-                current: HashSet::new(),
+                current: RecordSet::new(),
             }),
         }
     }
@@ -137,7 +136,7 @@ impl Stream for RecordSources {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         let this = self.project();
         let mut is_new = *this.is_first;
-        let mut new_set = HashSet::new();
+        let mut new_set = RecordSet::new();
         *this.is_first = false;
 
         for source in this.sources.iter_mut() {

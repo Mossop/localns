@@ -1,15 +1,14 @@
-use std::{
-    collections::HashSet,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use futures::{future::Abortable, StreamExt};
 use serde::Deserialize;
 use tokio::fs::read_to_string;
+use trust_dns_server::resolver::Name;
 
 use crate::{
+    config::deserialize_fqdn,
     config::Config,
-    rfc1035::{AbsoluteName, Record, RecordData, RecordSet},
+    record::{rdata, Record, RecordSet},
     watcher::{watch, FileEvent},
 };
 
@@ -18,7 +17,9 @@ use super::{create_source, RecordSource};
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub struct DhcpConfig {
     lease_file: PathBuf,
-    zone: AbsoluteName,
+
+    #[serde(deserialize_with = "deserialize_fqdn")]
+    zone: Name,
 }
 
 fn parse_dnsmasq(dhcp_config: &DhcpConfig, data: &str) -> Option<RecordSet> {
@@ -31,11 +32,9 @@ fn parse_dnsmasq(dhcp_config: &DhcpConfig, data: &str) -> Option<RecordSet> {
         }
 
         if let (Some(name), Some(ip)) = (parts.get(3), parts.get(2)) {
-            records.insert(Record {
-                name: dhcp_config.zone.prepend(name.to_owned().into()),
-                ttl: None,
-                data: RecordData::from(*ip),
-            });
+            let name = Name::parse(name, Some(&dhcp_config.zone)).unwrap();
+
+            records.insert(Record::new(name, rdata(ip)));
         }
     }
 
@@ -57,14 +56,14 @@ async fn parse_file(name: &str, dhcp_config: &DhcpConfig, lease_file: &Path) -> 
         Ok(s) => s,
         Err(e) => {
             log::error!("({}) Failed to read lease file: {}", name, e);
-            return HashSet::new();
+            return RecordSet::new();
         }
     };
 
     if let Some(records) = parse_dnsmasq(dhcp_config, &data) {
         records
     } else {
-        HashSet::new()
+        RecordSet::new()
     }
 }
 
@@ -97,7 +96,7 @@ pub(super) fn source(name: String, config: Config, dhcp_config: DhcpConfig) -> R
                 let records = match ev {
                     FileEvent::Delete => {
                         log::warn!("({}) dhcp file {} is missing.", name, lease_file.display());
-                        HashSet::new()
+                        RecordSet::new()
                     }
                     _ => parse_file(&name, &dhcp_config, &lease_file).await,
                 };

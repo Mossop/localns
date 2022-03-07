@@ -1,16 +1,10 @@
-use std::path::Path;
-
 use flexi_logger::Logger;
-use futures::{join, StreamExt};
+use futures::StreamExt;
 use localns::{config_stream, RecordSources, Server};
 use tokio::{
     select,
     signal::unix::{signal, SignalKind},
 };
-
-async fn clean_dir(_dir: &Path) -> Result<(), String> {
-    Ok(())
-}
 
 async fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
@@ -23,17 +17,12 @@ async fn run() -> Result<(), String> {
 
     log::trace!("Read initial configuration");
 
-    let (clean_result, mut record_sources) = join!(
-        clean_dir(&config.target_dir),
-        RecordSources::from_config(&config)
-    );
-
-    clean_result?;
+    let mut record_sources = RecordSources::from_config(&config).await;
 
     let mut sigterm = signal(SignalKind::terminate())
         .map_err(|e| format!("Failed to register signal handler: {}", e))?;
 
-    let mut server = Server::new(config.server_config()).await;
+    let mut server = Server::new(&config).await;
 
     loop {
         select! {
@@ -44,7 +33,7 @@ async fn run() -> Result<(), String> {
                     record_sources.destroy();
                     record_sources = RecordSources::from_config(&config).await;
 
-                    server.update_config(config.server_config()).await;
+                    server.update_config(&config).await;
                 },
                 None => {
                     log::trace!("Config stream ended");

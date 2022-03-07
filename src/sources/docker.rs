@@ -11,21 +11,19 @@ use futures::StreamExt;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
+use trust_dns_server::client::rr::RData;
 
-use crate::{
-    backoff::Backoff,
-    config::Config,
-    rfc1035::{AbsoluteName, Address, Record, RecordData},
-};
+use crate::record::{fqdn, Record, RecordSet};
+use crate::{backoff::Backoff, config::Config};
 
-use super::{create_source, RecordSet, RecordSource};
+use super::{create_source, RecordSource};
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub struct DockerLocal {}
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub struct DockerTls {
-    pub address: Address,
+    pub address: String,
     pub private_key: PathBuf,
     pub certificate: PathBuf,
     pub ca: PathBuf,
@@ -258,7 +256,7 @@ fn visible_networks(state: &DockerState) -> HashSet<String> {
 }
 
 fn generate_records(name: &str, state: DockerState) -> RecordSet {
-    let mut records = HashSet::new();
+    let mut records = RecordSet::new();
 
     let networks = visible_networks(&state);
 
@@ -284,11 +282,7 @@ fn generate_records(name: &str, state: DockerState) -> RecordSet {
                         hostname
                     );
                 } else {
-                    records.insert(Record {
-                        name: AbsoluteName::new(hostname),
-                        ttl: None,
-                        data: RecordData::A(*ip),
-                    });
+                    records.insert(Record::new(fqdn(hostname), RData::A(*ip)));
                 }
             } else {
                 log::warn!(
@@ -396,7 +390,7 @@ pub(super) fn source(name: String, config: Config, docker_config: DockerConfig) 
             loop {
                 match docker_loop(&name, &config, &docker_config, &sender).await {
                     LoopResult::Backoff => {
-                        if sender.send(HashSet::new()).await.is_err() {
+                        if sender.send(RecordSet::new()).await.is_err() {
                             return;
                         }
 

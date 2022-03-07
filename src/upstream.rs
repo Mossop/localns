@@ -1,16 +1,13 @@
 use std::net::{IpAddr, SocketAddr};
 
 use serde::Deserialize;
-use tokio::net::TcpStream;
-use trust_dns_server::{
-    client::{
-        client::AsyncClient,
-        client::ClientHandle,
-        op::Query,
-        rr::{rdata::SOA, Record},
-        tcp::TcpClientStream,
-    },
-    proto::iocompat::AsyncIoTokioAsStd,
+use tokio::net::UdpSocket;
+use trust_dns_server::client::{
+    client::AsyncClient,
+    client::ClientHandle,
+    op::Query,
+    rr::{rdata::SOA, Record},
+    udp::UdpClientStream,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -20,14 +17,16 @@ pub struct UpstreamConfig {
     port: Option<u16>,
 }
 
-async fn connect_client(address: SocketAddr) -> AsyncClient {
-    let (stream, sender) = TcpClientStream::<AsyncIoTokioAsStd<TcpStream>>::new(address);
+async fn connect_client(address: SocketAddr) -> Result<AsyncClient, String> {
+    let stream = UdpClientStream::<UdpSocket>::new(address);
 
-    let client = AsyncClient::new(stream, sender, None);
-    let (client, bg) = client.await.expect("connection failed");
+    let client = AsyncClient::connect(stream);
+    let (client, bg) = client
+        .await
+        .map_err(|e| format!("Failed to connect to DNS server: {}", e))?;
     tokio::spawn(bg);
 
-    client
+    Ok(client)
 }
 
 pub struct UpstreamResponse {
@@ -58,11 +57,18 @@ impl Upstream {
             query.name()
         );
 
-        let mut client = connect_client(SocketAddr::new(
+        let mut client = match connect_client(SocketAddr::new(
             self.config.address,
             self.config.port.unwrap_or(53),
         ))
-        .await;
+        .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("({}) {}", self.name, e);
+                return None;
+            }
+        };
 
         match client
             .query(

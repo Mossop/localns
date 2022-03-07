@@ -3,14 +3,17 @@ use std::{mem::replace, net::Ipv4Addr, sync::Arc};
 use serde::Deserialize;
 use tokio::{net::UdpSocket, sync::Mutex};
 use trust_dns_server::{
-    authority::{Authority, Catalog, ZoneType},
-    client::rr::{rdata, Name, RData, Record},
+    authority::{Authority, Catalog},
+    client::rr::{Name, RData, Record},
     server::{Request, RequestHandler, ResponseHandler, ResponseInfo},
-    store::in_memory::InMemoryAuthority,
     ServerFuture,
 };
 
+mod authority;
+
 use crate::rfc1035::RecordSet;
+
+use self::authority::SemiAuthoritativeAuthority;
 
 struct Handler {
     catalog: Arc<Mutex<Catalog>>,
@@ -46,27 +49,16 @@ async fn apply_config(server: &mut ServerFuture<Handler>, _config: &ServerConfig
     }
 }
 
-fn apply_records(catalog: &mut Catalog, _records: RecordSet) {
-    let origin = Name::parse("google.com.", None).unwrap();
-    let mut authority = InMemoryAuthority::empty(origin.clone(), ZoneType::Primary, false);
+async fn apply_records(catalog: &mut Catalog, _records: RecordSet) {
+    let origin = Name::parse("oxymoronical.com.", None).unwrap();
+    let mut authority = SemiAuthoritativeAuthority::new(origin.clone()).await;
 
-    let soa = rdata::SOA::new(
-        Name::parse("ns", Some(&origin)).unwrap(),
-        Name::parse("hostmaster", Some(&origin)).unwrap(),
-        1,
-        300,
-        300,
-        300,
-        300,
-    );
-    let record = Record::from_rdata(origin.clone(), 300, RData::SOA(soa));
-    authority.upsert_mut(record, 1);
     let record = Record::from_rdata(
         Name::parse("www", Some(&origin)).unwrap(),
         300,
         RData::A(Ipv4Addr::new(10, 10, 10, 10)),
     );
-    authority.upsert_mut(record, 1);
+    authority.insert(record);
 
     catalog.upsert(authority.origin().clone(), Box::new(Arc::new(authority)));
 }
@@ -74,7 +66,7 @@ fn apply_records(catalog: &mut Catalog, _records: RecordSet) {
 impl Server {
     pub async fn new(config: &ServerConfig) -> Self {
         let mut catalog = Catalog::new();
-        apply_records(&mut catalog, RecordSet::new());
+        apply_records(&mut catalog, RecordSet::new()).await;
         let locked = Arc::new(Mutex::new(catalog));
 
         let handler = Handler {
@@ -119,6 +111,6 @@ impl Server {
         }
 
         let mut catalog = self.catalog.lock().await;
-        apply_records(&mut catalog, records);
+        apply_records(&mut catalog, records).await;
     }
 }

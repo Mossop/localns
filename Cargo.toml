@@ -19,7 +19,7 @@ chrono = "^0.4.19"
 local-ip-address = "^0.4.4"
 reqwest = { version = "^0.11.9", features = ["json"] }
 notify = "^4.0.17"
-trust-dns-server = "^0.21.1"
+trust-dns-server = { version = "^0.21.1", features = ["trust-dns-resolver"] }
 async-trait = "^0.1.52"
 
 [patch.crates-io]

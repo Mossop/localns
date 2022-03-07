@@ -5,31 +5,16 @@ use tokio::{net::UdpSocket, sync::Mutex};
 use trust_dns_server::{
     authority::{Authority, Catalog},
     client::rr::{Name, RData, Record},
-    server::{Request, RequestHandler, ResponseHandler, ResponseInfo},
+    resolver::TokioAsyncResolver,
     ServerFuture,
 };
 
 mod authority;
+mod handler;
 
 use crate::rfc1035::RecordSet;
 
-use self::authority::SemiAuthoritativeAuthority;
-
-struct Handler {
-    catalog: Arc<Mutex<Catalog>>,
-}
-
-#[async_trait::async_trait]
-impl RequestHandler for Handler {
-    async fn handle_request<R: ResponseHandler>(
-        &self,
-        request: &Request,
-        response_handle: R,
-    ) -> ResponseInfo {
-        let catalog = self.catalog.lock().await;
-        catalog.handle_request(request, response_handle).await
-    }
-}
+use self::{authority::SemiAuthoritativeAuthority, handler::Handler};
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 pub struct ServerConfig {}
@@ -71,6 +56,7 @@ impl Server {
 
         let handler = Handler {
             catalog: locked.clone(),
+            resolver: TokioAsyncResolver::tokio_from_system_conf().unwrap(),
         };
 
         let mut dns_server = ServerFuture::new(handler);
@@ -93,6 +79,7 @@ impl Server {
 
         let handler = Handler {
             catalog: self.catalog.clone(),
+            resolver: TokioAsyncResolver::tokio_from_system_conf().unwrap(),
         };
 
         let dns_server = ServerFuture::new(handler);

@@ -16,8 +16,7 @@ COPY Cargo.* .
 COPY src /rust/src
 COPY bollard-stubs /rust/bollard-stubs
 RUN apk add \
-    musl-dev \
-    openssl-dev && \
+    musl-dev && \
   cargo build
 
 FROM alpine
@@ -27,8 +26,7 @@ ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLA
 RUN \
   tar -C / -Jxpf /tmp/s6-overlay-noarch-${S6_OVERLAY_VERSION}.tar.xz && \
   tar -C / -Jxpf /tmp/s6-overlay-x86_64-${S6_OVERLAY_VERSION}.tar.xz && \
-  rm /tmp/*.tar.xz && \
-  apk add openssl libc6-compat
+  rm /tmp/*.tar.xz
 
 COPY --from=go-build /go/bin/coredns /bin/coredns
 COPY --from=rust-build /rust/target/debug/localns /bin/localns

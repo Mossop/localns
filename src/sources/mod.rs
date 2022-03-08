@@ -72,6 +72,17 @@ impl RecordSources {
             is_first: true,
         };
 
+        for (name, dhcp_config) in config.dhcp_sources() {
+            log::trace!("Adding dhcp source {}", name);
+            sources
+                .add_source(dhcp::source(
+                    name.clone(),
+                    config.clone(),
+                    dhcp_config.clone(),
+                ))
+                .await;
+        }
+
         for (name, docker_config) in config.docker_sources() {
             log::trace!("Adding docker source {}", name);
             sources
@@ -90,17 +101,6 @@ impl RecordSources {
                     name.clone(),
                     config.clone(),
                     traefik_config.clone(),
-                ))
-                .await;
-        }
-
-        for (name, dhcp_config) in config.dhcp_sources() {
-            log::trace!("Adding dhcp source {}", name);
-            sources
-                .add_source(dhcp::source(
-                    name.clone(),
-                    config.clone(),
-                    dhcp_config.clone(),
                 ))
                 .await;
         }

@@ -1,6 +1,5 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 
-use serde::Deserialize;
 use tokio::net::UdpSocket;
 use trust_dns_server::client::{
     client::AsyncClient,
@@ -10,12 +9,9 @@ use trust_dns_server::client::{
     udp::UdpClientStream,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub struct UpstreamConfig {
-    address: IpAddr,
-    #[serde(default)]
-    port: Option<u16>,
-}
+use crate::config::Address;
+
+pub type UpstreamConfig = Address;
 
 async fn connect_client(address: SocketAddr) -> Result<AsyncClient, String> {
     let stream = UdpClientStream::<UdpSocket>::new(address);
@@ -55,15 +51,18 @@ impl Upstream {
             "({}) Forwarding query for {} to upstream {}",
             self.name,
             query.name(),
-            self.config.address
+            self.config
         );
 
-        let mut client = match connect_client(SocketAddr::new(
-            self.config.address,
-            self.config.port.unwrap_or(53),
-        ))
-        .await
-        {
+        let address = match self.config.to_socket_address(53) {
+            Ok(addr) => addr,
+            Err(e) => {
+                log::error!("Unable to lookup nameserver: {}", e);
+                return None;
+            }
+        };
+
+        let mut client = match connect_client(address).await {
             Ok(c) => c,
             Err(e) => {
                 log::warn!("({}) {}", self.name, e);

@@ -8,15 +8,15 @@ use tokio::{sync::mpsc, time::sleep};
 
 use crate::{
     backoff::Backoff,
-    config::Config,
-    record::{fqdn, rdata, Name, Record, RecordSet},
+    config::{Address, Config},
+    record::{fqdn, Name, Record, RecordSet},
 };
 
 use super::{create_source, RecordSource};
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub struct TraefikConfig {
-    address: String,
+    address: Address,
 
     #[serde(default)]
     url: Option<String>,
@@ -150,7 +150,7 @@ fn generate_records(
             }
         })
         .flatten()
-        .map(|name| Record::new(name, rdata(&traefik_config.address)))
+        .map(|name| Record::new(name, traefik_config.address.host.rdata()))
         .collect()
 }
 

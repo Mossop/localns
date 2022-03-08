@@ -1,5 +1,4 @@
 use futures::StreamExt;
-use local_ip_address::local_ip;
 use serde::{
     de::{self, Visitor},
     Deserialize, Deserializer,
@@ -7,10 +6,12 @@ use serde::{
 use std::{
     collections::hash_map::Iter,
     collections::HashMap,
-    env, fmt,
+    env,
+    fmt::{self, Display},
     fs::File,
-    net::IpAddr,
+    net::{AddrParseError, IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
+    str::FromStr,
     time::Duration,
 };
 use tokio::sync::mpsc;
@@ -18,7 +19,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     debounce::Debounced,
-    record::{Name, RecordSet},
+    record::{Name, RData, RecordSet},
     server::{ServerConfig, Zone},
     sources::{dhcp::DhcpConfig, docker::DockerConfig, traefik::TraefikConfig, SourceConfig},
     upstream::{Upstream, UpstreamConfig},
@@ -26,6 +27,154 @@ use crate::{
 };
 
 const CONFIG_DEBOUNCE: Duration = Duration::from_millis(500);
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Hash)]
+#[serde(from = "String")]
+pub enum Host {
+    Name(String),
+    Ipv4(Ipv4Addr),
+    Ipv6(Ipv6Addr),
+}
+
+impl Host {
+    pub fn rdata(&self) -> RData {
+        match self {
+            Host::Name(name) => RData::CNAME(Name::parse(name, None).unwrap()),
+            Host::Ipv4(ip) => RData::A(*ip),
+            Host::Ipv6(ip) => RData::AAAA(*ip),
+        }
+    }
+}
+
+impl Display for Host {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Host::Name(st) => f.pad(st),
+            Host::Ipv4(ip) => f.pad(&ip.to_string()),
+            Host::Ipv6(ip) => f.pad(&ip.to_string()),
+        }
+    }
+}
+
+impl From<&str> for Host {
+    fn from(host: &str) -> Self {
+        if let Ok(ip) = host.parse() {
+            Host::Ipv4(ip)
+        } else if let Ok(ip) = host.parse() {
+            Host::Ipv6(ip)
+        } else {
+            Host::Name(host.into())
+        }
+    }
+}
+
+impl From<String> for Host {
+    fn from(host: String) -> Self {
+        if let Ok(ip) = host.parse() {
+            Host::Ipv4(ip)
+        } else if let Ok(ip) = host.parse() {
+            Host::Ipv6(ip)
+        } else {
+            Host::Name(host)
+        }
+    }
+}
+
+impl From<Ipv4Addr> for Host {
+    fn from(ip: Ipv4Addr) -> Self {
+        Host::Ipv4(ip)
+    }
+}
+
+impl From<Ipv6Addr> for Host {
+    fn from(ip: Ipv6Addr) -> Self {
+        Host::Ipv6(ip)
+    }
+}
+
+impl From<IpAddr> for Host {
+    fn from(ip: IpAddr) -> Self {
+        match ip {
+            IpAddr::V4(ip) => ip.into(),
+            IpAddr::V6(ip) => ip.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Hash)]
+#[serde(from = "String")]
+pub struct Address {
+    pub host: Host,
+    pub port: Option<u16>,
+}
+
+impl Address {
+    pub fn address(&self, default_port: u16) -> String {
+        format!("{}:{}", self.host, self.port.unwrap_or(default_port))
+    }
+
+    pub fn to_socket_address(&self, default_port: u16) -> Result<SocketAddr, AddrParseError> {
+        SocketAddr::from_str(&format!(
+            "{}:{}",
+            self.host,
+            self.port.unwrap_or(default_port)
+        ))
+    }
+}
+
+impl Display for Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(port) = self.port {
+            f.pad(&format!("{}:{}", self.host, port))
+        } else {
+            f.pad(&self.host.to_string())
+        }
+    }
+}
+
+impl From<&str> for Address {
+    fn from(host: &str) -> Self {
+        if let Ok(addr) = SocketAddr::from_str(host) {
+            Self {
+                host: addr.ip().into(),
+                port: Some(addr.port()),
+            }
+        } else if let Ok(ip) = host.parse::<Ipv4Addr>() {
+            Host::from(ip).into()
+        } else if let Ok(ip) = host.parse::<Ipv6Addr>() {
+            Host::from(ip).into()
+        } else if let Some(pos) = host.rfind(':') {
+            if let Ok(port) = host[pos + 1..].parse::<u16>() {
+                Self {
+                    host: host[0..pos].into(),
+                    port: Some(port),
+                }
+            } else {
+                Self {
+                    host: host.into(),
+                    port: None,
+                }
+            }
+        } else {
+            Self {
+                host: host.into(),
+                port: None,
+            }
+        }
+    }
+}
+
+impl From<String> for Address {
+    fn from(host: String) -> Self {
+        Address::from(host.as_str())
+    }
+}
+
+impl From<Host> for Address {
+    fn from(host: Host) -> Self {
+        Self { host, port: None }
+    }
+}
 
 struct NameVisitor;
 
@@ -67,8 +216,6 @@ struct ZoneConfig {
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 struct ConfigFile {
-    ip_address: Option<IpAddr>,
-
     #[serde(default)]
     pub upstream: Option<UpstreamConfig>,
 
@@ -127,19 +274,6 @@ impl Config {
 
     pub fn dhcp_sources(&self) -> Iter<String, DhcpConfig> {
         self.config.sources.dhcp.iter()
-    }
-
-    pub fn ip_address(&self) -> Result<IpAddr, String> {
-        if let Some(ip) = self.config.ip_address {
-            Ok(ip)
-        } else {
-            local_ip().map_err(|e| {
-                format!(
-                    "Unable to find local IP address, please specify in config: {}",
-                    e
-                )
-            })
-        }
     }
 
     pub fn upstream(&self) -> &Option<UpstreamConfig> {

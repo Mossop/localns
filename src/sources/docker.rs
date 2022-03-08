@@ -12,6 +12,7 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 
+use crate::config::Address;
 use crate::record::{fqdn, RData, Record, RecordSet};
 use crate::{backoff::Backoff, config::Config};
 
@@ -22,7 +23,7 @@ pub struct DockerLocal {}
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub struct DockerTls {
-    pub address: String,
+    pub address: Address,
     pub private_key: PathBuf,
     pub certificate: PathBuf,
     pub ca: PathBuf,

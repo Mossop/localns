@@ -14,18 +14,12 @@ records and optionally an upstream for everything else. A number of sources will
 be supported starting with docker containers, traefik instances and dnsmasq
 lease files. Others should be straightforward to add.
 
-Internally [CoreDNS](https://coredns.io/) is used to actually serve the records
-while a custom rust binary generates the internal records.
-
 ## Configuration
 
-Configuration is done via a yaml file located at `/etc/localns/config.yml`:
+Configuration is done via a yaml file located at `/etc/localns/config.yaml`:
 
 ```yaml
-upstream:
-  protocol: tls
-  address: 1.1.1.1
-  servername: cloudflare-dns.com
+upstream: 1.1.1.1
 sources:
   docker:
     local: {}
@@ -41,7 +35,7 @@ queried for zones not known locally. It is optional.
 
 The sources key lists the different sources of records, see below.
 
-The zones allows for fine-tuning of zone configuration. Zones will still be
+The zones key allows for fine-tuning of zone configuration. Zones will still be
 generated for domains not listed here when records are discovered, they will
 just use the default values.
 
@@ -69,18 +63,3 @@ host records for all of the known http services.
 
 Attempts to read hosts from a dhcp lease file (currently dnsmasq format is
 supported).
-
-## Why not just write a CoreDNS plugin?
-
-A lot of the idea of this project was inspired by CoreDNS. A server with
-pluggable sources of DNS records. It uses CoreDNS as the server itself because
-I'm only interested in writing the record collection parts, not implementing a
-fully featured DNS server.
-
-So why isn't this just a collection of additional CoreDNS plugins? Honestly it
-probably should be but at least for now I have no interest in writing code in
-Go and I have a lot of interest in building up my Rust expertise. This seemed
-the fastest path to get something to do what I needed.
-
-It's possible that later I'll look into figuring out a way to write CoreDNS
-plugins in Rust which would simplify a number of things.

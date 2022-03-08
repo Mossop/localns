@@ -18,7 +18,7 @@ COPY bollard-stubs /rust/bollard-stubs
 RUN apk add \
     musl-dev \
     openssl-dev && \
-  cargo build --release
+  cargo build
 
 FROM alpine
 ARG S6_OVERLAY_VERSION=3.0.0.2-2
@@ -31,7 +31,7 @@ RUN \
   apk add openssl libc6-compat
 
 COPY --from=go-build /go/bin/coredns /bin/coredns
-COPY --from=rust-build /rust/target/release/localns /bin/localns
+COPY --from=rust-build /rust/target/debug/localns /bin/localns
 COPY etc /etc/
 
 ENV LOCALNS_CONFIG=/etc/localns/config.yaml

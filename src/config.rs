@@ -19,7 +19,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     debounce::Debounced,
-    record::{Name, RData, RecordSet},
+    record::{fqdn, Name, RData, RecordSet},
     server::{ServerConfig, Zone},
     sources::{dhcp::DhcpConfig, docker::DockerConfig, traefik::TraefikConfig, SourceConfig},
     upstream::{Upstream, UpstreamConfig},
@@ -39,7 +39,7 @@ pub enum Host {
 impl Host {
     pub fn rdata(&self) -> RData {
         match self {
-            Host::Name(name) => RData::CNAME(Name::parse(name, None).unwrap()),
+            Host::Name(name) => RData::CNAME(fqdn(name)),
             Host::Ipv4(ip) => RData::A(*ip),
             Host::Ipv6(ip) => RData::AAAA(*ip),
         }

@@ -18,7 +18,10 @@ use self::handler::Handler;
 pub use zone::Zone;
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
-pub struct ServerConfig {}
+pub struct ServerConfig {
+    #[serde(default)]
+    port: Option<u16>,
+}
 
 pub struct Server {
     config: Config,
@@ -30,8 +33,11 @@ pub struct Server {
     catalog: Arc<Mutex<Catalog>>,
 }
 
-async fn apply_config(server: &mut ServerFuture<Handler>, _config: &ServerConfig) {
-    match UdpSocket::bind("0.0.0.0:53").await {
+async fn apply_config(server: &mut ServerFuture<Handler>, config: &ServerConfig) {
+    let port = config.port.unwrap_or(53);
+    log::trace!("Server listening on port {}", port);
+
+    match UdpSocket::bind(("0.0.0.0", port)).await {
         Ok(socket) => server.register_socket(socket),
         Err(e) => log::error!("Unable to open DNS socket: {}", e),
     }

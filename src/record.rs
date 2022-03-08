@@ -86,7 +86,7 @@ pub fn rdata(name: &str) -> RData {
     } else if let Ok(ip) = Ipv6Addr::from_str(name) {
         RData::AAAA(ip)
     } else {
-        RData::CNAME(Name::parse(name, None).unwrap())
+        RData::CNAME(fqdn(name))
     }
 }
 

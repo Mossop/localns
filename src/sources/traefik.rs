@@ -9,7 +9,7 @@ use tokio::{sync::mpsc, time::sleep};
 use crate::{
     backoff::Backoff,
     config::{Address, Config},
-    record::{fqdn, Name, Record, RecordSet},
+    record::{fqdn, Name, RData, Record, RecordSet},
 };
 
 use super::{create_source, RecordSource};
@@ -140,7 +140,9 @@ fn generate_records(
     traefik_config: &TraefikConfig,
     routers: Vec<ApiRouter>,
 ) -> RecordSet {
-    routers
+    let rdata = traefik_config.address.host.rdata();
+
+    let mut names: Vec<Name> = routers
         .iter()
         .filter_map(|r| match parse_hosts(&r.rule) {
             Ok(hosts) => Some(hosts),
@@ -150,7 +152,15 @@ fn generate_records(
             }
         })
         .flatten()
-        .map(|name| Record::new(name, traefik_config.address.host.rdata()))
+        .collect();
+
+    if let RData::CNAME(ref name) = rdata {
+        names = names.drain(..).filter(|n| n != name).collect();
+    }
+
+    names
+        .drain(..)
+        .map(|name| Record::new(name, rdata.clone()))
         .collect()
 }
 

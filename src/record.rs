@@ -17,6 +17,12 @@ pub struct Record {
 
 impl Record {
     pub fn new(name: Name, data: RData) -> Self {
+        if let RData::CNAME(ref alias) = data {
+            if &name == alias {
+                panic!("Attempted to create a CNAME cycle with {}", name);
+            }
+        }
+
         Self {
             name,
             data,

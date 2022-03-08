@@ -11,9 +11,8 @@ use futures::StreamExt;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
-use trust_dns_server::client::rr::RData;
 
-use crate::record::{fqdn, Record, RecordSet};
+use crate::record::{fqdn, RData, Record, RecordSet};
 use crate::{backoff::Backoff, config::Config};
 
 use super::{create_source, RecordSource};

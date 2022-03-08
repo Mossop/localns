@@ -15,11 +15,10 @@ use std::{
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use trust_dns_server::resolver::Name;
 
 use crate::{
     debounce::Debounced,
-    record::RecordSet,
+    record::{Name, RecordSet},
     server::{ServerConfig, Zone},
     sources::{dhcp::DhcpConfig, docker::DockerConfig, traefik::TraefikConfig, SourceConfig},
     upstream::{Upstream, UpstreamConfig},

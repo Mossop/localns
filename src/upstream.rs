@@ -51,10 +51,11 @@ impl Upstream {
     }
 
     pub async fn lookup(&self, query: Query) -> Option<UpstreamResponse> {
-        log::debug!(
-            "({}) Forwarding query for {} upstream",
+        log::trace!(
+            "({}) Forwarding query for {} to upstream {}",
             self.name,
-            query.name()
+            query.name(),
+            self.config.address
         );
 
         let mut client = match connect_client(SocketAddr::new(

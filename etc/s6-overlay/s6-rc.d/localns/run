@@ -1,4 +1,3 @@
 #!/command/execlineb -P
 with-contenv
-cd /etc/zones
 /bin/localns

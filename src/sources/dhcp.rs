@@ -3,12 +3,11 @@ use std::path::{Path, PathBuf};
 use futures::{future::Abortable, StreamExt};
 use serde::Deserialize;
 use tokio::fs::read_to_string;
-use trust_dns_server::resolver::Name;
 
 use crate::{
     config::deserialize_fqdn,
     config::Config,
-    record::{rdata, Record, RecordSet},
+    record::{rdata, Name, Record, RecordSet},
     watcher::{watch, FileEvent},
 };
 

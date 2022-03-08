@@ -5,12 +5,11 @@ use futures::future::Abortable;
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Deserialize};
 use tokio::{sync::mpsc, time::sleep};
-use trust_dns_server::resolver::Name;
 
 use crate::{
     backoff::Backoff,
     config::Config,
-    record::{fqdn, rdata, Record, RecordSet},
+    record::{fqdn, rdata, Name, Record, RecordSet},
 };
 
 use super::{create_source, RecordSource};

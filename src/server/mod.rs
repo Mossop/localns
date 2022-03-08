@@ -5,14 +5,13 @@ use tokio::{net::UdpSocket, sync::Mutex};
 use trust_dns_server::{
     authority::{Authority, Catalog},
     client::rr::LowerName,
-    resolver::TokioAsyncResolver,
     ServerFuture,
 };
 
 mod handler;
 mod zone;
 
-use crate::{config::Config, record::RecordSet};
+use crate::{config::Config, record::RecordSet, upstream::Upstream};
 
 use self::handler::Handler;
 
@@ -44,6 +43,8 @@ async fn apply_records(
     mut previous_names: HashSet<LowerName>,
     records: RecordSet,
 ) -> HashSet<LowerName> {
+    log::trace!("Updating server with records: {:?}", records);
+
     let mut names = HashSet::new();
 
     for zone in config.zones(records) {
@@ -64,7 +65,10 @@ impl Server {
 
         let handler = Handler {
             catalog: locked.clone(),
-            resolver: TokioAsyncResolver::tokio_from_system_conf().unwrap(),
+            upstream: config
+                .upstream()
+                .as_ref()
+                .map(|c| Upstream::new("server", c)),
         };
 
         let mut dns_server = ServerFuture::new(handler);
@@ -98,7 +102,10 @@ impl Server {
 
         let handler = Handler {
             catalog: self.catalog.clone(),
-            resolver: TokioAsyncResolver::tokio_from_system_conf().unwrap(),
+            upstream: config
+                .upstream()
+                .as_ref()
+                .map(|c| Upstream::new("server", c)),
         };
 
         let dns_server = ServerFuture::new(handler);

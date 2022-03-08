@@ -7,14 +7,14 @@ use trust_dns_server::{
     },
     client::{
         op::{Query, ResponseCode},
-        rr::{self, rdata, LowerName, Name, RData, RecordSet, RecordType},
+        rr::{self, rdata, LowerName, RecordSet, RecordType},
     },
     server::RequestInfo,
     store::in_memory::InMemoryAuthority,
 };
 
 use crate::{
-    record::Record,
+    record::{Name, RData, Record},
     upstream::{Upstream, UpstreamResponse},
 };
 
@@ -61,6 +61,7 @@ fn lookup_from_response(
 pub struct Zone {
     inner: InMemoryAuthority,
     upstream: Option<Upstream>,
+    default_ttl: u32,
     serial: u32,
 }
 
@@ -71,6 +72,7 @@ impl Zone {
         let mut this = Self {
             inner,
             upstream,
+            default_ttl: 300,
             serial: 1,
         };
 
@@ -80,8 +82,8 @@ impl Zone {
             1,
             300,
             300,
-            300,
-            300,
+            1800,
+            60,
         );
 
         this.insert(Record::new(origin, RData::SOA(soa)));
@@ -89,7 +91,11 @@ impl Zone {
     }
 
     pub fn insert(&mut self, record: Record) {
-        let rr = rr::Record::from_rdata(record.name, record.ttl.unwrap_or(300), record.data);
+        let rr = rr::Record::from_rdata(
+            record.name,
+            record.ttl.unwrap_or(self.default_ttl),
+            record.data,
+        );
 
         self.serial += 1;
         self.inner.upsert_mut(rr, self.serial);

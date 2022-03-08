@@ -15,7 +15,7 @@ async fn run() -> Result<(), String> {
         None => return Ok(()),
     };
 
-    log::trace!("Read initial configuration");
+    log::debug!("Read initial configuration");
 
     let mut record_sources = RecordSources::from_config(&config).await;
 

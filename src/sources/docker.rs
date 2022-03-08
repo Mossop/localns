@@ -326,13 +326,13 @@ async fn docker_loop(
     };
 
     match (version.version, version.api_version) {
-        (Some(v), Some(a)) => log::info!(
+        (Some(v), Some(a)) => log::debug!(
             "({}) Connected to docker daemon version {} (API {:?}).",
             name,
             v,
             a
         ),
-        _ => log::info!("({}) Connected to docker daemon.", name),
+        _ => log::debug!("({}) Connected to docker daemon.", name),
     }
 
     let state = match fetch_state(&docker).await {
@@ -353,7 +353,6 @@ async fn docker_loop(
         match events.next().await {
             Some(Ok(ev)) => {
                 if useful_event(&ev) {
-                    log::trace!("({}) Saw docker event {:?} {:?}", name, ev.typ, ev.action);
                     let state = match fetch_state(&docker).await {
                         Ok(state) => state,
                         Err(e) => {
@@ -368,12 +367,7 @@ async fn docker_loop(
                     }
                 }
             }
-            Some(Err(e)) => {
-                log::error!("({}) Docker events stream reported an error: {}", name, e);
-                return LoopResult::Retry;
-            }
-            None => {
-                log::trace!("({}) Docker events stream hung up.", name);
+            _ => {
                 return LoopResult::Retry;
             }
         }

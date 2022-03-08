@@ -57,7 +57,7 @@ impl Upstream {
         let address = match self.config.to_socket_address(53) {
             Ok(addr) => addr,
             Err(e) => {
-                log::error!("Unable to lookup nameserver: {}", e);
+                log::error!("({}) Unable to lookup nameserver: {}", self.name, e);
                 return None;
             }
         };
@@ -65,7 +65,7 @@ impl Upstream {
         let mut client = match connect_client(address).await {
             Ok(c) => c,
             Err(e) => {
-                log::warn!("({}) {}", self.name, e);
+                log::error!("({}) {}", self.name, e);
                 return None;
             }
         };

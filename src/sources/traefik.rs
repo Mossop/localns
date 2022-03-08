@@ -193,7 +193,7 @@ async fn traefik_loop(
         Err(result) => return result,
     };
 
-    log::info!(
+    log::debug!(
         "({}) Connected to traefik version {}.",
         name,
         version.version

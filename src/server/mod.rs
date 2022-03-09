@@ -1,7 +1,11 @@
 use std::{collections::HashSet, mem::replace, sync::Arc};
 
 use serde::Deserialize;
-use tokio::{net::UdpSocket, sync::Mutex};
+use tokio::{
+    net::UdpSocket,
+    select,
+    sync::{watch, Mutex},
+};
 use trust_dns_server::{
     authority::{Authority, Catalog},
     client::rr::LowerName,
@@ -60,33 +64,66 @@ async fn apply_records(
         catalog.upsert(zone.origin().clone(), Box::new(Arc::new(zone)));
     }
 
+    for name in previous_names {
+        catalog.remove(&name);
+    }
+
     names
 }
 
 impl Server {
-    pub async fn new(config: &Config) -> Self {
-        let mut catalog = Catalog::new();
-        let names = apply_records(config, &mut catalog, HashSet::new(), RecordSet::new()).await;
-        let locked = Arc::new(Mutex::new(catalog));
+    pub fn create(
+        mut config_stream: watch::Receiver<Config>,
+        mut record_stream: watch::Receiver<RecordSet>,
+    ) {
+        let config = config_stream.borrow_and_update().clone();
+        let records = record_stream.borrow_and_update().clone();
 
-        let handler = Handler {
-            catalog: locked.clone(),
-            upstream: config
-                .upstream()
-                .as_ref()
-                .map(|c| Upstream::new("server", c)),
-        };
+        tokio::spawn(async move {
+            let mut catalog = Catalog::new();
+            let names = apply_records(&config, &mut catalog, HashSet::new(), records).await;
+            let locked = Arc::new(Mutex::new(catalog));
 
-        let mut dns_server = ServerFuture::new(handler);
-        apply_config(&mut dns_server, config.server_config()).await;
+            let handler = Handler {
+                catalog: locked.clone(),
+                upstream: config
+                    .upstream()
+                    .as_ref()
+                    .map(|c| Upstream::new("server", c)),
+            };
 
-        Server {
-            config: config.clone(),
-            records: RecordSet::new(),
-            current_zones: names,
-            dns_server,
-            catalog: locked,
-        }
+            let mut dns_server = ServerFuture::new(handler);
+            apply_config(&mut dns_server, config.server_config()).await;
+
+            let mut server = Server {
+                config: config.clone(),
+                records: RecordSet::new(),
+                current_zones: names,
+                dns_server,
+                catalog: locked,
+            };
+
+            loop {
+                select! {
+                    result = config_stream.changed() => {
+                        if result.is_err() {
+                            return;
+                        }
+
+                        let config = config_stream.borrow().clone();
+                        server.update_config(&config).await;
+                    },
+                    result = record_stream.changed() => {
+                        if result.is_err() {
+                            return;
+                        }
+
+                        let records = record_stream.borrow().clone();
+                        server.update_records(records).await;
+                    }
+                }
+            }
+        });
     }
 
     pub async fn update_config(&mut self, config: &Config) {

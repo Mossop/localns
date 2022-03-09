@@ -19,7 +19,10 @@ use tokio::sync::watch;
 use crate::{
     record::{fqdn, Name, RData, RecordSet},
     server::{ServerConfig, Zone},
-    sources::{dhcp::DhcpConfig, docker::DockerConfig, traefik::TraefikConfig, SourceConfig},
+    sources::{
+        dhcp::DhcpConfig, docker::DockerConfig, file::FileConfig, traefik::TraefikConfig,
+        SourceConfig,
+    },
     upstream::{Upstream, UpstreamConfig},
     watcher::watch,
 };
@@ -306,6 +309,10 @@ impl Config {
 
     pub fn dhcp_sources(&self) -> Iter<String, DhcpConfig> {
         self.config.sources.dhcp.iter()
+    }
+
+    pub fn file_sources(&self) -> Iter<String, FileConfig> {
+        self.config.sources.file.iter()
     }
 
     pub fn upstream(&self) -> &Option<UpstreamConfig> {

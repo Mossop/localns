@@ -13,6 +13,7 @@ use crate::{config::Config, record::RecordSet};
 
 pub mod dhcp;
 pub mod docker;
+pub mod file;
 pub mod traefik;
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
@@ -25,6 +26,9 @@ pub struct SourceConfig {
 
     #[serde(default)]
     pub dhcp: HashMap<String, dhcp::DhcpConfig>,
+
+    #[serde(default)]
+    pub file: HashMap<String, file::FileConfig>,
 }
 
 #[derive(Clone, Hash)]
@@ -146,6 +150,14 @@ impl RecordSources {
             log::trace!("Adding dhcp source {}", name);
             let (context, pending) = self.add_source().await;
             dhcp::source(name.clone(), config.clone(), dhcp_config.clone(), context);
+            assert!(pending.await.is_err());
+        }
+
+        // File sources are assumed to not need any additional resolution.
+        for (name, file_config) in config.file_sources() {
+            log::trace!("Adding file source {}", name);
+            let (context, pending) = self.add_source().await;
+            file::source(name.clone(), config.clone(), file_config.clone(), context);
             assert!(pending.await.is_err());
         }
 

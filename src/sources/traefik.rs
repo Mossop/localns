@@ -132,10 +132,69 @@ fn parse_hosts(rule: &str) -> Result<Vec<Name>, String> {
         }
     }
 
-    if state == State::Post {
+    if state == State::Post || state == State::Pre {
         Ok(hosts)
     } else {
         Err(format!("Unexpected end of rule (in state {:?})", state))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parse_hosts() {
+        fn do_parse(rule: &str) -> Vec<String> {
+            super::parse_hosts(rule)
+                .expect("Should be no parse error")
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<String>>()
+        }
+
+        assert_eq!(
+            do_parse("Host(`allthethings.dev`)"),
+            vec!["allthethings.dev."]
+        );
+
+        assert_eq!(
+            do_parse("Host(   `allthethings.dev`  )"),
+            vec!["allthethings.dev."]
+        );
+
+        assert_eq!(
+            do_parse("Host(   \"allthethings.dev\")"),
+            vec!["allthethings.dev."]
+        );
+
+        assert_eq!(
+            do_parse("Host(`allthethings.dev`,`foo.example.com`)"),
+            vec!["allthethings.dev.", "foo.example.com."]
+        );
+
+        assert_eq!(
+            do_parse("Host(`allthethings.dev`, `foo.example.com`)"),
+            vec!["allthethings.dev.", "foo.example.com."]
+        );
+
+        assert_eq!(
+            do_parse("Host(`allthethings.dev` , `foo.example.com`)"),
+            vec!["allthethings.dev.", "foo.example.com."]
+        );
+
+        assert_eq!(
+            do_parse("Host(`allthethings.dev`, `foo.example.com`)"),
+            vec!["allthethings.dev.", "foo.example.com."]
+        );
+
+        assert_eq!(
+            do_parse(
+                "Host(`phpmyadmin.cloud.oxymoronical.com`,`postfixadmin.cloud.oxymoronical.com`,)"
+            ),
+            vec![
+                "phpmyadmin.cloud.oxymoronical.com.",
+                "postfixadmin.cloud.oxymoronical.com."
+            ]
+        );
     }
 }
 

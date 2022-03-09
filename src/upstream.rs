@@ -50,13 +50,6 @@ impl Upstream {
     }
 
     pub async fn lookup(&self, query: Query) -> Option<UpstreamResponse> {
-        log::trace!(
-            "({}) Forwarding query for {} to upstream {}",
-            self.name,
-            query.name(),
-            self.config
-        );
-
         let address = match self.config.to_socket_address(53) {
             Ok(addr) => addr,
             Err(e) => {

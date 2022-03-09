@@ -26,6 +26,9 @@ async fn connect_client(address: SocketAddr) -> Result<AsyncClient, String> {
 }
 
 pub struct UpstreamResponse {
+    pub authoritative: bool,
+    pub recursion_available: bool,
+
     pub answers: Vec<Record>,
     pub additionals: Vec<Record>,
     pub name_servers: Vec<Record>,
@@ -79,6 +82,9 @@ impl Upstream {
             .await
         {
             Ok(mut response) => Some(UpstreamResponse {
+                authoritative: response.authoritative(),
+                recursion_available: response.recursion_available(),
+
                 answers: response.take_answers(),
                 additionals: response.take_additionals(),
                 name_servers: response.take_name_servers(),

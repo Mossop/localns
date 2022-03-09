@@ -264,34 +264,55 @@ fn generate_records(name: &str, state: DockerState) -> RecordSet {
 
     for container in state.containers.values() {
         if let Some(hostname) = container.labels.get("localns.hostname") {
-            let possible_ips: Vec<Ipv4Addr> = container
-                .networks
-                .values()
-                .filter_map(|endpoint| {
-                    if networks.contains(&endpoint.network.id) {
-                        endpoint.ip
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            if let Some(network) = container.labels.get("localns.network") {
+                let mut seen = false;
 
-            if let Some(ip) = possible_ips.get(0) {
-                if possible_ips.len() > 1 {
+                for endpoint in container.networks.values() {
+                    if &endpoint.network.name == network {
+                        if let Some(ip) = endpoint.ip {
+                            records.insert(Record::new(fqdn(hostname), RData::A(ip)));
+                            seen = true;
+                        }
+                    }
+                }
+
+                if !seen {
                     log::warn!(
-                        "({}) Cannot add record for {} as it is present on multiple possible networks.",
+                        "({}) Cannot add record for {} as its 'localns.network' label references an invalid network.",
+                        name,
+                        hostname
+                    )
+                }
+            } else {
+                let possible_ips: Vec<Ipv4Addr> = container
+                    .networks
+                    .values()
+                    .filter_map(|endpoint| {
+                        if networks.contains(&endpoint.network.id) {
+                            endpoint.ip
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                if let Some(ip) = possible_ips.get(0) {
+                    if possible_ips.len() > 1 {
+                        log::warn!(
+                            "({}) Cannot add record for {} as it is present on multiple possible networks.",
+                            name,
+                            hostname
+                        );
+                    } else {
+                        records.insert(Record::new(fqdn(hostname), RData::A(*ip)));
+                    }
+                } else {
+                    log::warn!(
+                        "({}) Cannot add record for {} as none of its networks appeared usable.",
                         name,
                         hostname
                     );
-                } else {
-                    records.insert(Record::new(fqdn(hostname), RData::A(*ip)));
                 }
-            } else {
-                log::warn!(
-                    "({}) Cannot add record for {} as none of its networks appeared usable.",
-                    name,
-                    hostname
-                );
             }
         }
     }

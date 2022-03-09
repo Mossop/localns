@@ -43,9 +43,13 @@ impl Handler {
                         )
                     });
 
+                    let mut response_header = Header::response_from_request(request.header());
+                    response_header.set_authoritative(false);
+                    response_header.set_recursion_available(false);
+
                     response_handle
                         .send_response(MessageResponseBuilder::from_message_request(request).build(
-                            *request.header(),
+                            response_header,
                             &response.answers,
                             &response.name_servers,
                             &soa,

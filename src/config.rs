@@ -6,7 +6,6 @@ use serde::{
 };
 use std::{
     collections::hash_map::Iter,
-    collections::HashMap,
     env,
     fmt::{self, Display},
     fs::File,
@@ -17,7 +16,7 @@ use std::{
 use tokio::sync::watch;
 
 use crate::{
-    record::{fqdn, Name, RData, RecordSet},
+    record::{fqdn, Name, RData},
     server::{ServerConfig, Zone},
     sources::{
         dhcp::DhcpConfig, docker::DockerConfig, file::FileConfig, traefik::TraefikConfig,
@@ -259,9 +258,6 @@ struct ConfigFile {
 
     #[serde(default)]
     pub sources: SourceConfig,
-
-    #[serde(default)]
-    pub zones: HashMap<String, ZoneConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -319,50 +315,14 @@ impl Config {
         &self.config.upstream
     }
 
-    fn zone(&self, domain: Name) -> Zone {
-        let name = domain.to_string();
-        let fqdn = String::from(name.trim_end_matches('.'));
-
-        let config = self.config.zones.get(&fqdn);
-        let upstream_config = match config {
-            Some(c) => {
-                if c.authoratative {
-                    None
-                } else {
-                    c.upstream.as_ref().or(self.config.upstream.as_ref())
-                }
-            }
-            None => self.config.upstream.as_ref(),
-        };
-
-        let upstream = upstream_config.map(|c| Upstream::new(&domain.to_string(), c));
+    pub fn zone(&self, domain: Name) -> Zone {
+        let upstream = self
+            .config
+            .upstream
+            .as_ref()
+            .map(|c| Upstream::new(&domain.to_string(), c));
 
         Zone::new(domain, upstream)
-    }
-
-    pub fn zones(&self, records: &RecordSet) -> Vec<Zone> {
-        let mut zones: HashMap<Name, Zone> = Default::default();
-
-        for domain in self.config.zones.keys() {
-            let name = Name::parse(&format!("{}.", domain), None).unwrap();
-            let zone = self.zone(name.clone());
-            zones.insert(name, zone);
-        }
-
-        for record in records {
-            let domain = record.name.trim_to((record.name.num_labels() - 1).into());
-
-            match zones.get_mut(&domain) {
-                Some(zone) => zone.insert(record.clone()),
-                None => {
-                    let mut zone = self.zone(domain.clone());
-                    zone.insert(record.clone());
-                    zones.insert(domain, zone);
-                }
-            };
-        }
-
-        zones.into_values().collect()
     }
 }
 

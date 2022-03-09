@@ -15,7 +15,11 @@ use trust_dns_server::{
 mod handler;
 mod zone;
 
-use crate::{config::Config, record::RecordSet, upstream::Upstream};
+use crate::{
+    config::Config,
+    record::{split, RecordSet},
+    upstream::Upstream,
+};
 
 use self::handler::Handler;
 
@@ -64,16 +68,30 @@ async fn apply_records(
         let record_list = records
             .iter()
             .map(|r| format!("{} => {}", r.name, r.data))
-            .collect::<Vec<String>>()
-            .join("\n");
-        log::trace!("Updating server with records\n{}", record_list);
+            .collect::<Vec<String>>();
+
+        if record_list.is_empty() {
+            log::trace!("Updating server with 0 records");
+        } else {
+            log::trace!(
+                "Updating server with {} records\n{}",
+                record_list.len(),
+                record_list.join("\n")
+            );
+        }
     }
 
     let mut previous_zones = current_zones.clone();
 
-    for zone in config.zones(records) {
+    let zone_records = split(records);
+    for (domain, records) in zone_records {
+        let mut zone = config.zone(domain);
         current_zones.insert(zone.origin().clone());
         previous_zones.remove(&zone.origin().clone());
+
+        for record in records {
+            zone.insert(record);
+        }
 
         catalog.upsert(zone.origin().clone(), Box::new(Arc::new(zone)));
     }

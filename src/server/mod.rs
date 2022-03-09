@@ -60,7 +60,14 @@ async fn apply_records(
     current_zones: &mut HashSet<LowerName>,
     records: &RecordSet,
 ) {
-    log::trace!("Updating server with records: {:?}", records);
+    if log::log_enabled!(log::Level::Trace) {
+        let record_list = records
+            .iter()
+            .map(|r| format!("{} => {}", r.name, r.data))
+            .collect::<Vec<String>>()
+            .join("\n");
+        log::trace!("Updating server with records\n{}", record_list);
+    }
 
     let mut previous_zones = current_zones.clone();
 

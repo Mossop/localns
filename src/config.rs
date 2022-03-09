@@ -1,4 +1,5 @@
 use futures::StreamExt;
+use reqwest::Url;
 use serde::{
     de::{self, Visitor},
     Deserialize, Deserializer,
@@ -98,6 +99,18 @@ impl From<IpAddr> for Host {
             IpAddr::V4(ip) => ip.into(),
             IpAddr::V6(ip) => ip.into(),
         }
+    }
+}
+
+impl From<&Name> for Host {
+    fn from(name: &Name) -> Self {
+        let mut clone = name.clone();
+        if !clone.is_fqdn() {
+            panic!("Expected a FQDN");
+        }
+
+        clone.set_fqdn(false);
+        Host::Name(clone.to_ascii())
     }
 }
 
@@ -203,6 +216,30 @@ where
     D: Deserializer<'de>,
 {
     de.deserialize_str(NameVisitor)
+}
+
+struct UrlVisitor;
+
+impl<'de> Visitor<'de> for UrlVisitor {
+    type Value = Url;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "a string that parses as a URL")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Url::parse(value).map_err(|e| E::custom(format!("{}", e)))
+    }
+}
+
+pub fn deserialize_url<'de, D>(de: D) -> Result<Url, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    de.deserialize_str(UrlVisitor)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]

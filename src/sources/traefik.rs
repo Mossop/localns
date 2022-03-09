@@ -1,25 +1,24 @@
-use std::time::Duration;
+use std::{net::SocketAddr, time::Duration};
 
 use chrono::{DateTime, Utc};
 use futures::future::Abortable;
-use reqwest::Client;
+use reqwest::{Client, ClientBuilder, Url};
 use serde::{de::DeserializeOwned, Deserialize};
 use tokio::{sync::mpsc, time::sleep};
 
 use crate::{
     backoff::Backoff,
-    config::{Address, Config},
-    record::{fqdn, Name, RData, Record, RecordSet},
+    config::{deserialize_url, Host},
+    record::{fqdn, Name, RData, Record, RecordSet, SharedRecordSet},
 };
 
 use super::{create_source, RecordSource};
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub struct TraefikConfig {
-    address: Address,
-
-    #[serde(default)]
-    url: Option<String>,
+    #[serde(deserialize_with = "deserialize_url")]
+    url: Url,
+    address: Option<Host>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -46,13 +45,18 @@ enum LoopResult {
 async fn api_call<T>(
     name: &str,
     client: &Client,
-    base_url: &str,
+    base_url: &Url,
     method: &str,
 ) -> Result<T, LoopResult>
 where
     T: DeserializeOwned,
 {
-    match client.get(format!("{}{}", base_url, method)).send().await {
+    let target = base_url.join(method).map_err(|e| {
+        log::error!("Unable to generate API URL: {}", e);
+        LoopResult::Quit
+    })?;
+
+    match client.get(target).send().await {
         Ok(response) => match response.json::<T>().await {
             Ok(result) => Ok(result),
             Err(e) => {
@@ -140,7 +144,15 @@ fn generate_records(
     traefik_config: &TraefikConfig,
     routers: Vec<ApiRouter>,
 ) -> RecordSet {
-    let rdata = traefik_config.address.host.rdata();
+    let host = if let Some(address) = &traefik_config.address {
+        address.clone()
+    } else if let Some(host) = traefik_config.url.host_str() {
+        Host::from(host)
+    } else {
+        return RecordSet::new();
+    };
+
+    let rdata = host.rdata();
 
     let mut names: Vec<Name> = routers
         .iter()
@@ -166,29 +178,36 @@ fn generate_records(
 
 async fn traefik_loop(
     name: &str,
-    _config: &Config,
     traefik_config: &TraefikConfig,
-    client: &Client,
+    records: &SharedRecordSet,
     sender: &mpsc::Sender<RecordSet>,
 ) -> LoopResult {
-    let base_url = match traefik_config.url {
-        Some(ref url) => {
-            if url.ends_with('/') {
-                url.clone()
-            } else {
-                format!("{}/", url)
-            }
-        }
-        None => format!("http://{}/api/", traefik_config.address),
-    };
-
     log::trace!(
         "({}) Attempting to connect to traefik API at {}...",
         name,
-        base_url
+        traefik_config.url
     );
 
-    let version = match api_call::<ApiVersion>(name, client, &base_url, "version").await {
+    let mut builder = ClientBuilder::new();
+
+    if let Some(host) = traefik_config.url.host_str() {
+        match records.resolve(&Host::Name(host.to_owned())) {
+            Host::Ipv4(ip) => {
+                log::trace!("({}) Found address {} for host {}", name, ip, host);
+                builder = builder.resolve(host, SocketAddr::new(ip.into(), 0))
+            }
+            Host::Ipv6(ip) => {
+                log::trace!("({}) Found address {} for host {}", name, ip, host);
+                builder = builder.resolve(host, SocketAddr::new(ip.into(), 0))
+            }
+            _ => {}
+        }
+    }
+
+    let client = builder.build().unwrap();
+
+    let version = match api_call::<ApiVersion>(name, &client, &traefik_config.url, "version").await
+    {
         Ok(r) => r,
         Err(result) => return result,
     };
@@ -201,7 +220,9 @@ async fn traefik_loop(
 
     loop {
         let routers =
-            match api_call::<Vec<ApiRouter>>(name, client, &base_url, "http/routers").await {
+            match api_call::<Vec<ApiRouter>>(name, &client, &traefik_config.url, "http/routers")
+                .await
+            {
                 Ok(r) => r,
                 Err(result) => return result,
             };
@@ -215,16 +236,19 @@ async fn traefik_loop(
     }
 }
 
-pub(super) fn source(name: String, config: Config, traefik_config: TraefikConfig) -> RecordSource {
+pub(super) fn source(
+    name: String,
+    traefik_config: TraefikConfig,
+    records: SharedRecordSet,
+) -> RecordSource {
     let (sender, registration, source) = create_source();
 
     tokio::spawn(Abortable::new(
         async move {
-            let client = Client::new();
             let mut backoff = Backoff::default();
 
             loop {
-                match traefik_loop(&name, &config, &traefik_config, &client, &sender).await {
+                match traefik_loop(&name, &traefik_config, &records, &sender).await {
                     LoopResult::Backoff => {
                         if sender.send(RecordSet::new()).await.is_err() {
                             return;

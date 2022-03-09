@@ -14,7 +14,11 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::{config::Config, debounce::Debounced, record::RecordSet};
+use crate::{
+    config::Config,
+    debounce::Debounced,
+    record::{RecordSet, SharedRecordSet},
+};
 
 pub mod dhcp;
 pub mod docker;
@@ -61,6 +65,7 @@ struct Item {
 pin_project! {
     pub struct RecordSources {
         sources: Vec<Item>,
+        records: SharedRecordSet,
         is_first: bool,
     }
 }
@@ -69,6 +74,7 @@ impl RecordSources {
     pub async fn from_config(config: &Config) -> Self {
         let mut sources = Self {
             sources: Vec::new(),
+            records: SharedRecordSet::new(RecordSet::new()),
             is_first: true,
         };
 
@@ -99,8 +105,8 @@ impl RecordSources {
             sources
                 .add_source(traefik::source(
                     name.clone(),
-                    config.clone(),
                     traefik_config.clone(),
+                    sources.records.clone(),
                 ))
                 .await;
         }
@@ -110,11 +116,14 @@ impl RecordSources {
 
     pub async fn add_source(&mut self, mut source: RecordSource) {
         match source.stream.next().await {
-            Some(records) => self.sources.push(Item {
-                source,
-                finished: false,
-                current: records,
-            }),
+            Some(records) => {
+                self.sources.push(Item {
+                    source,
+                    finished: false,
+                    current: records.clone(),
+                });
+                self.records.add_records(records)
+            }
             None => self.sources.push(Item {
                 source,
                 finished: true,
@@ -166,6 +175,7 @@ impl Stream for RecordSources {
         }
 
         if is_new {
+            this.records.replace_records(new_set.clone());
             Poll::Ready(Some(new_set))
         } else {
             Poll::Pending

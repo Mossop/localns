@@ -333,7 +333,7 @@ impl Config {
         Zone::new(domain, upstream)
     }
 
-    pub fn zones(&self, records: RecordSet) -> Vec<Zone> {
+    pub fn zones(&self, records: &RecordSet) -> Vec<Zone> {
         let mut zones: HashMap<Name, Zone> = Default::default();
 
         for domain in self.config.zones.keys() {
@@ -346,10 +346,10 @@ impl Config {
             let domain = record.name.trim_to((record.name.num_labels() - 1).into());
 
             match zones.get_mut(&domain) {
-                Some(zone) => zone.insert(record),
+                Some(zone) => zone.insert(record.clone()),
                 None => {
                     let mut zone = self.zone(domain.clone());
-                    zone.insert(record);
+                    zone.insert(record.clone());
                     zones.insert(domain, zone);
                 }
             };

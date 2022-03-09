@@ -1,5 +1,5 @@
 use flexi_logger::Logger;
-use localns::{config_stream, RecordSources, Server};
+use localns::{config_stream, create_server, RecordSources};
 use tokio::{
     select,
     signal::unix::{signal, SignalKind},
@@ -11,7 +11,7 @@ async fn run() -> Result<(), String> {
     let mut config_stream = config_stream(&args);
     let mut record_sources = RecordSources::new();
 
-    Server::create(config_stream.clone(), record_sources.receiver());
+    create_server(config_stream.clone(), record_sources.receiver());
 
     record_sources
         .replace_sources(&config_stream.borrow_and_update())

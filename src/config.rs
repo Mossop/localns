@@ -13,21 +13,16 @@ use std::{
     net::{AddrParseError, IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     str::FromStr,
-    time::Duration,
 };
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
+use tokio::sync::watch;
 
 use crate::{
-    debounce::Debounced,
     record::{fqdn, Name, RData, RecordSet},
     server::{ServerConfig, Zone},
     sources::{dhcp::DhcpConfig, docker::DockerConfig, traefik::TraefikConfig, SourceConfig},
     upstream::{Upstream, UpstreamConfig},
     watcher::watch,
 };
-
-const CONFIG_DEBOUNCE: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Hash)]
 #[serde(from = "String")]
@@ -364,18 +359,32 @@ impl Config {
     }
 }
 
-pub fn config_stream(args: &[String]) -> Debounced<ReceiverStream<Config>> {
-    let (sender, receiver) = mpsc::channel(5);
-    let stream = Debounced::new(ReceiverStream::new(receiver), CONFIG_DEBOUNCE);
+pub fn config_stream(args: &[String]) -> watch::Receiver<Config> {
     let config_file = config_file(args.get(1));
+    log::info!("Reading configuration from {}.", config_file.display());
+    let mut file_stream = watch(&config_file).unwrap();
 
-    log::info!("Reading configuration from {}.", config_file.display(),);
+    let mut config = Config::from_file(&config_file);
+
+    let (sender, receiver) = watch::channel(match config {
+        Ok(ref c) => c.clone(),
+        Err(ref e) => {
+            log::error!("{}", e);
+            Config::default(&config_file)
+        }
+    });
 
     tokio::spawn(async move {
-        let mut config = Config::from_file(&config_file);
-        let mut file_stream = watch(&config_file).unwrap();
-
         loop {
+            file_stream.next().await;
+
+            let next_config = Config::from_file(&config_file);
+            if next_config == config {
+                continue;
+            }
+
+            config = next_config;
+
             let actual_config = match config {
                 Ok(ref config) => config.clone(),
                 Err(ref e) => {
@@ -384,24 +393,14 @@ pub fn config_stream(args: &[String]) -> Debounced<ReceiverStream<Config>> {
                 }
             };
 
-            if let Err(e) = sender.send(actual_config).await {
+            if let Err(e) = sender.send(actual_config) {
                 log::error!("Failed to send updated config: {}", e);
                 return;
-            }
-
-            loop {
-                file_stream.next().await;
-
-                let next_config = Config::from_file(&config_file);
-                if next_config != config {
-                    config = next_config;
-                    break;
-                }
             }
         }
     });
 
-    stream
+    receiver
 }
 
 fn config_file(arg: Option<&String>) -> PathBuf {

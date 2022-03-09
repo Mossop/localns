@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use flexi_logger::Logger;
-use futures::StreamExt;
 use localns::{config_stream, RecordSources, Server};
 use tokio::{
     select,
@@ -12,12 +11,7 @@ async fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
 
     let mut config_stream = config_stream(&args);
-    let mut config = match config_stream.next().await {
-        Some(config) => config,
-        None => return Ok(()),
-    };
-
-    log::debug!("Read initial configuration");
+    let config = config_stream.borrow_and_update().clone();
 
     let mut record_sources = RecordSources::new();
     record_sources.replace_sources(&config).await;
@@ -30,15 +24,14 @@ async fn run() -> Result<(), String> {
 
     loop {
         select! {
-            next = config_stream.next() => match next {
-                Some(new_config) => {
+            result = config_stream.changed() => match result {
+                Ok(_) => {
                     log::trace!("Saw updated configuration");
-                    config = new_config;
+                    let config = config_stream.borrow().clone();
                     record_sources.replace_sources(&config).await;
-
                     server.update_config(&config).await;
                 },
-                None => {
+                Err(_) => {
                     log::trace!("Config stream ended");
                     break;
                 },

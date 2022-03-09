@@ -51,6 +51,10 @@ impl RecordSourcesState {
 
     fn set_records(&mut self, source: &Uuid, records: RecordSet) {
         if let Some(source) = self.sources.get_mut(source) {
+            if source.records == records {
+                return;
+            }
+
             source.records = records;
         }
 

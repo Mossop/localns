@@ -1,6 +1,5 @@
 mod backoff;
 mod config;
-mod debounce;
 mod record;
 mod server;
 mod sources;

@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use crate::config::Address;
-use crate::record::{fqdn, RData, Record, RecordSet};
+use crate::record::{fqdn, RData, Record, RecordSet, SharedRecordSet};
 use crate::{backoff::Backoff, config::Config};
 
 use super::{create_source, RecordSource};
@@ -152,7 +152,12 @@ fn useful_event(ev: &models::SystemEventsResponse) -> bool {
     }
 }
 
-fn connect(name: &str, config: &Config, docker_config: &DockerConfig) -> Result<Docker, String> {
+fn connect(
+    name: &str,
+    config: &Config,
+    docker_config: &DockerConfig,
+    records: &SharedRecordSet,
+) -> Result<Docker, String> {
     match docker_config {
         DockerConfig::Address(address) => {
             if address.starts_with("http://") {
@@ -190,8 +195,13 @@ fn connect(name: &str, config: &Config, docker_config: &DockerConfig) -> Result<
             let ca = config.path(&tls_config.ca);
             check_file(&ca)?;
 
+            let resolved = Address {
+                host: records.resolve(&tls_config.address.host),
+                port: tls_config.address.port,
+            };
+
             Docker::connect_with_ssl(
-                &tls_config.address.to_string(),
+                &resolved.address(2376),
                 &private_key,
                 &certificate,
                 &ca,
@@ -307,9 +317,10 @@ async fn docker_loop(
     name: &str,
     config: &Config,
     docker_config: &DockerConfig,
+    records: &SharedRecordSet,
     sender: &mpsc::Sender<RecordSet>,
 ) -> LoopResult {
-    let docker = match connect(name, config, docker_config) {
+    let docker = match connect(name, config, docker_config, records) {
         Ok(docker) => docker,
         Err(e) => {
             log::error!("({}) {}", name, e);
@@ -374,7 +385,12 @@ async fn docker_loop(
     }
 }
 
-pub(super) fn source(name: String, config: Config, docker_config: DockerConfig) -> RecordSource {
+pub(super) fn source(
+    name: String,
+    config: Config,
+    docker_config: DockerConfig,
+    records: SharedRecordSet,
+) -> RecordSource {
     let (sender, registration, source) = create_source();
 
     tokio::spawn(Abortable::new(
@@ -382,7 +398,7 @@ pub(super) fn source(name: String, config: Config, docker_config: DockerConfig) 
             let mut backoff = Backoff::default();
 
             loop {
-                match docker_loop(&name, &config, &docker_config, &sender).await {
+                match docker_loop(&name, &config, &docker_config, &records, &sender).await {
                     LoopResult::Backoff => {
                         if sender.send(RecordSet::new()).await.is_err() {
                             return;

@@ -96,6 +96,7 @@ impl RecordSources {
                     name.clone(),
                     config.clone(),
                     docker_config.clone(),
+                    sources.records.clone(),
                 ))
                 .await;
         }

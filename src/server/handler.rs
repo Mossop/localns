@@ -4,7 +4,7 @@ use tokio::sync::Mutex;
 use trust_dns_server::{
     authority::{Catalog, MessageResponseBuilder},
     client::{
-        op::{Header, MessageType, OpCode, ResponseCode},
+        op::{Edns, Header, MessageType, OpCode, ResponseCode},
         rr::Record,
     },
     server::{Request, RequestHandler, ResponseHandler, ResponseInfo},
@@ -30,6 +30,47 @@ impl Handler {
         request: &Request,
         mut response_handle: R,
     ) -> ResponseInfo {
+        let mut builder = MessageResponseBuilder::from_message_request(request);
+
+        // check if it's edns
+        if let Some(req_edns) = request.edns() {
+            let mut response_header = Header::response_from_request(request.header());
+
+            let mut resp_edns: Edns = Edns::new();
+
+            // check our version against the request
+            // TODO: what version are we?
+            let our_version = 0;
+            resp_edns.set_dnssec_ok(false);
+            resp_edns.set_max_payload(req_edns.max_payload().max(512));
+            resp_edns.set_version(our_version);
+
+            builder.edns(resp_edns);
+
+            if req_edns.version() > our_version {
+                log::warn!(
+                    "request edns version greater than {}: {}",
+                    our_version,
+                    req_edns.version()
+                );
+                response_header.set_response_code(ResponseCode::BADVERS);
+
+                // TODO: should ResponseHandle consume self?
+                let result = response_handle
+                    .send_response(builder.build_no_records(response_header))
+                    .await;
+
+                // couldn't handle the request
+                return match result {
+                    Err(e) => {
+                        log::error!("request error: {}", e);
+                        serve_failed()
+                    }
+                    Ok(info) => info,
+                };
+            }
+        }
+
         let request_info = request.request_info();
 
         let result = if let Some(ref upstream) = self.upstream {
@@ -48,7 +89,7 @@ impl Handler {
                     response_header.set_recursion_available(response.recursion_available);
 
                     response_handle
-                        .send_response(MessageResponseBuilder::from_message_request(request).build(
+                        .send_response(builder.build(
                             response_header,
                             &response.answers,
                             &response.name_servers,
@@ -59,19 +100,13 @@ impl Handler {
                 }
                 None => {
                     response_handle
-                        .send_response(
-                            MessageResponseBuilder::from_message_request(request)
-                                .error_msg(request.header(), ResponseCode::Refused),
-                        )
+                        .send_response(builder.error_msg(request.header(), ResponseCode::Refused))
                         .await
                 }
             }
         } else {
             response_handle
-                .send_response(
-                    MessageResponseBuilder::from_message_request(request)
-                        .error_msg(request.header(), ResponseCode::Refused),
-                )
+                .send_response(builder.error_msg(request.header(), ResponseCode::Refused))
                 .await
         };
 

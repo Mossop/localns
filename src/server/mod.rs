@@ -1,8 +1,8 @@
-use std::{collections::HashSet, mem::replace, sync::Arc};
+use std::{collections::HashSet, mem::replace, sync::Arc, time::Duration};
 
 use serde::Deserialize;
 use tokio::{
-    net::UdpSocket,
+    net::{TcpListener, UdpSocket},
     select,
     sync::{watch, Mutex},
 };
@@ -43,7 +43,12 @@ async fn apply_config(server: &mut ServerFuture<Handler>, config: &ServerConfig)
 
     match UdpSocket::bind(("0.0.0.0", port)).await {
         Ok(socket) => server.register_socket(socket),
-        Err(e) => log::error!("Unable to open DNS socket: {}", e),
+        Err(e) => log::error!("Unable to open UDP socket: {}", e),
+    }
+
+    match TcpListener::bind(("0.0.0.0", port)).await {
+        Ok(socket) => server.register_listener(socket, Duration::from_millis(500)),
+        Err(e) => log::error!("Unable to open TCP socket: {}", e),
     }
 }
 

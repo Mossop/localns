@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use flexi_logger::Logger;
 use futures::StreamExt;
 use localns::{config_stream, RecordSources, Server};
@@ -17,7 +19,9 @@ async fn run() -> Result<(), String> {
 
     log::debug!("Read initial configuration");
 
-    let mut record_sources = RecordSources::from_config(&config).await;
+    let mut record_sources = RecordSources::new();
+    record_sources.replace_sources(&config).await;
+    let mut record_stream = record_sources.receiver();
 
     let mut sigterm = signal(SignalKind::terminate())
         .map_err(|e| format!("Failed to register signal handler: {}", e))?;
@@ -30,8 +34,7 @@ async fn run() -> Result<(), String> {
                 Some(new_config) => {
                     log::trace!("Saw updated configuration");
                     config = new_config;
-                    record_sources.destroy();
-                    record_sources = RecordSources::from_config(&config).await;
+                    record_sources.replace_sources(&config).await;
 
                     server.update_config(&config).await;
                 },
@@ -40,9 +43,14 @@ async fn run() -> Result<(), String> {
                     break;
                 },
             },
-            Some(records) = record_sources.next() => {
+            result = record_stream.changed() => {
+                let records = match result {
+                    Ok(_) => record_stream.borrow().clone(),
+                    Err(_) => HashSet::new(),
+                };
+
                 server.update_records(records).await;
-            }
+            },
             _ = sigterm.recv() => {
                 log::trace!("Saw SIGTERM");
                 break;
@@ -50,7 +58,7 @@ async fn run() -> Result<(), String> {
         }
     }
 
-    record_sources.destroy();
+    record_sources.destroy().await;
 
     Ok(())
 }

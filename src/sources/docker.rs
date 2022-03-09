@@ -9,14 +9,13 @@ use bollard::{Docker, API_DEFAULT_VERSION};
 use futures::future::Abortable;
 use futures::StreamExt;
 use serde::Deserialize;
-use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use crate::config::Address;
-use crate::record::{fqdn, RData, Record, RecordSet, SharedRecordSet};
+use crate::record::{fqdn, RData, Record, RecordSet};
 use crate::{backoff::Backoff, config::Config};
 
-use super::{create_source, RecordSource};
+use super::SourceContext;
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub struct DockerLocal {}
@@ -152,25 +151,22 @@ fn useful_event(ev: &models::SystemEventsResponse) -> bool {
     }
 }
 
-fn connect(
-    name: &str,
-    config: &Config,
-    docker_config: &DockerConfig,
-    records: &SharedRecordSet,
-) -> Result<Docker, String> {
+fn connect(name: &str, config: &Config, docker_config: &DockerConfig) -> Result<Docker, String> {
     match docker_config {
         DockerConfig::Address(address) => {
             if address.starts_with("http://") {
                 log::trace!(
-                    "({}) Attempting to connect to docker daemon over http...",
-                    name
+                    "({}) Attempting to connect to docker daemon at {}...",
+                    name,
+                    address
                 );
                 Docker::connect_with_http(address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)
                     .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
             } else {
                 log::trace!(
-                    "({}) Attempting to connect to docker daemon over local socket...",
-                    name
+                    "({}) Attempting to connect to docker daemon at {}...",
+                    name,
+                    address
                 );
                 Docker::connect_with_local(address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)
                     .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
@@ -183,11 +179,6 @@ fn connect(
                 .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
         }
         DockerConfig::Tls(tls_config) => {
-            log::trace!(
-                "({}) Attempting to connect to docker daemon over TLS...",
-                name
-            );
-
             let private_key = config.path(&tls_config.private_key);
             check_file(&private_key)?;
             let certificate = config.path(&tls_config.certificate);
@@ -195,13 +186,14 @@ fn connect(
             let ca = config.path(&tls_config.ca);
             check_file(&ca)?;
 
-            let resolved = Address {
-                host: records.resolve(&tls_config.address.host),
-                port: tls_config.address.port,
-            };
+            log::trace!(
+                "({}) Attempting to connect to docker daemon at https://{}/...",
+                name,
+                tls_config.address.address(2376)
+            );
 
             Docker::connect_with_ssl(
-                &resolved.address(2376),
+                &tls_config.address.address(2376),
                 &private_key,
                 &certificate,
                 &ca,
@@ -310,17 +302,15 @@ fn generate_records(name: &str, state: DockerState) -> RecordSet {
 enum LoopResult {
     Backoff,
     Retry,
-    Quit,
 }
 
 async fn docker_loop(
     name: &str,
     config: &Config,
     docker_config: &DockerConfig,
-    records: &SharedRecordSet,
-    sender: &mpsc::Sender<RecordSet>,
+    context: &mut SourceContext,
 ) -> LoopResult {
-    let docker = match connect(name, config, docker_config, records) {
+    let docker = match connect(name, config, docker_config) {
         Ok(docker) => docker,
         Err(e) => {
             log::error!("({}) {}", name, e);
@@ -355,9 +345,7 @@ async fn docker_loop(
     };
 
     let records = generate_records(name, state);
-    if sender.send(records).await.is_err() {
-        return LoopResult::Quit;
-    }
+    context.send(records);
 
     let mut events = docker.events::<&str>(None);
     loop {
@@ -373,9 +361,7 @@ async fn docker_loop(
                     };
 
                     let records = generate_records(name, state);
-                    if sender.send(records).await.is_err() {
-                        return LoopResult::Quit;
-                    }
+                    context.send(records);
                 }
             }
             _ => {
@@ -389,34 +375,26 @@ pub(super) fn source(
     name: String,
     config: Config,
     docker_config: DockerConfig,
-    records: SharedRecordSet,
-) -> RecordSource {
-    let (sender, registration, source) = create_source();
+    mut context: SourceContext,
+) {
+    let registration = context.abort_registration();
 
     tokio::spawn(Abortable::new(
         async move {
             let mut backoff = Backoff::default();
 
             loop {
-                match docker_loop(&name, &config, &docker_config, &records, &sender).await {
+                match docker_loop(&name, &config, &docker_config, &mut context).await {
                     LoopResult::Backoff => {
-                        if sender.send(RecordSet::new()).await.is_err() {
-                            return;
-                        }
-
+                        context.send(RecordSet::new());
                         sleep(backoff.next()).await;
                     }
                     LoopResult::Retry => {
                         backoff.reset();
-                    }
-                    LoopResult::Quit => {
-                        return;
                     }
                 }
             }
         },
         registration,
     ));
-
-    source
 }

@@ -4,12 +4,9 @@ use std::{
     hash::Hasher,
     net::{Ipv4Addr, Ipv6Addr},
     str::FromStr,
-    sync::{Arc, Mutex},
 };
 
 pub use trust_dns_server::client::rr::{Name, RData};
-
-use crate::config::Host;
 
 #[derive(Debug, Eq, Clone)]
 pub struct Record {
@@ -100,65 +97,3 @@ pub fn rdata(name: &str) -> RData {
 }
 
 pub type RecordSet = HashSet<Record>;
-
-fn resolve(records: &RecordSet, name: Name) -> Option<Host> {
-    for record in records.iter() {
-        if record.name == name {
-            match &record.data {
-                RData::A(ip) => return Some(Host::Ipv4(*ip)),
-                RData::AAAA(ip) => return Some(Host::Ipv6(*ip)),
-                RData::CNAME(name) => return Some(name.into()),
-                _ => return None,
-            }
-        }
-    }
-
-    None
-}
-
-#[derive(Clone)]
-pub struct SharedRecordSet {
-    records: Arc<Mutex<RecordSet>>,
-}
-
-impl SharedRecordSet {
-    pub fn new(records: RecordSet) -> Self {
-        Self {
-            records: Arc::new(Mutex::new(records)),
-        }
-    }
-
-    pub fn add_records(&self, new_records: RecordSet) {
-        let mut records = self.records.lock().unwrap();
-
-        for record in new_records {
-            records.insert(record);
-        }
-    }
-
-    pub fn replace_records(&self, new_records: RecordSet) {
-        let mut records = self.records.lock().unwrap();
-
-        records.clear();
-        for record in new_records {
-            records.insert(record);
-        }
-    }
-
-    pub fn resolve(&self, address: &Host) -> Host {
-        let resolved = if let Host::Name(hostname) = address {
-            let name = fqdn(hostname);
-            let records = self.records.lock().unwrap();
-
-            resolve(&records, name)
-        } else {
-            return address.clone();
-        };
-
-        if let Some(host) = resolved {
-            self.resolve(&host)
-        } else {
-            address.clone()
-        }
-    }
-}

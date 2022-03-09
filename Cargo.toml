@@ -20,6 +20,7 @@ reqwest = { version = "^0.11.9", default-features = false, features = ["json", "
 notify = "^4.0.17"
 trust-dns-server = "^0.21.1"
 async-trait = "^0.1.52"
+uuid = { version = "^0.8.2", features = ["v4"] }
 
 [patch.crates-io]
 bollard-stubs = { path = "bollard-stubs" }

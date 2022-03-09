@@ -1,24 +1,15 @@
 use std::{
     collections::HashMap,
-    pin::Pin,
-    task::{Context, Poll},
-    time::Duration,
+    future::{pending, Pending},
+    sync::Arc,
 };
 
-use futures::{
-    future::{AbortHandle, AbortRegistration},
-    stream::{Stream, StreamExt},
-};
-use pin_project_lite::pin_project;
+use futures::future::{abortable, AbortHandle, AbortRegistration, Abortable};
 use serde::Deserialize;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
+use tokio::sync::{watch, Mutex};
+use uuid::Uuid;
 
-use crate::{
-    config::Config,
-    debounce::Debounced,
-    record::{RecordSet, SharedRecordSet},
-};
+use crate::{config::Config, record::RecordSet};
 
 pub mod dhcp;
 pub mod docker;
@@ -36,150 +27,171 @@ pub struct SourceConfig {
     pub dhcp: HashMap<String, dhcp::DhcpConfig>,
 }
 
-pub struct RecordSource {
-    abort: AbortHandle,
-    stream: Debounced<ReceiverStream<RecordSet>>,
+#[derive(Clone, Hash)]
+struct SourceKey;
+
+struct RecordSourcesState {
+    sources: HashMap<Uuid, RecordSource>,
+    sender: watch::Sender<RecordSet>,
 }
 
-fn create_source() -> (mpsc::Sender<RecordSet>, AbortRegistration, RecordSource) {
-    let (sender, receiver) = mpsc::channel(5);
-    let (handle, registration) = AbortHandle::new_pair();
-    let stream = Debounced::new(ReceiverStream::new(receiver), Duration::from_millis(500));
-
-    (
-        sender,
-        registration,
-        RecordSource {
-            abort: handle,
-            stream,
-        },
-    )
-}
-
-struct Item {
-    source: RecordSource,
-    finished: bool,
-    current: RecordSet,
-}
-
-pin_project! {
-    pub struct RecordSources {
-        sources: Vec<Item>,
-        records: SharedRecordSet,
-        is_first: bool,
+impl RecordSourcesState {
+    fn new(sender: watch::Sender<RecordSet>) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self {
+            sources: HashMap::new(),
+            sender,
+        }))
     }
+
+    fn new_source(&mut self) -> Uuid {
+        let uuid = Uuid::new_v4();
+        self.sources.insert(uuid, Default::default());
+        uuid
+    }
+
+    fn set_records(&mut self, source: &Uuid, records: RecordSet) {
+        if let Some(source) = self.sources.get_mut(source) {
+            source.records = records;
+        }
+
+        let all_records = self
+            .sources
+            .values()
+            .flat_map(|source| source.records.clone())
+            .collect();
+
+        if let Err(e) = self.sender.send(all_records) {
+            log::trace!("Failed to send new records: {}", e);
+        }
+    }
+
+    fn register_abort(&mut self, source: &Uuid, handle: AbortHandle) {
+        let source = self.sources.get_mut(source).unwrap();
+        source.aborters.push(handle);
+    }
+
+    fn abort(&mut self) {
+        for (_, source) in self.sources.drain() {
+            for handle in source.aborters {
+                handle.abort();
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct RecordSource {
+    records: RecordSet,
+    aborters: Vec<AbortHandle>,
+}
+
+struct SourceContext {
+    uuid: Uuid,
+    state: Arc<Mutex<RecordSourcesState>>,
+    record_waiter: Option<AbortHandle>,
+}
+
+impl SourceContext {
+    fn send(&mut self, records: RecordSet) {
+        let state = self.state.clone();
+        let uuid = self.uuid;
+        let waiter = self.record_waiter.take();
+
+        tokio::spawn(async move {
+            let mut sources = state.lock().await;
+            sources.set_records(&uuid, records);
+
+            if let Some(handle) = waiter {
+                handle.abort();
+            }
+        });
+    }
+
+    fn abort_registration(&self) -> AbortRegistration {
+        let state = self.state.clone();
+        let uuid = self.uuid;
+        let (handle, registration) = AbortHandle::new_pair();
+
+        tokio::spawn(async move {
+            let mut sources = state.lock().await;
+            sources.register_abort(&uuid, handle)
+        });
+
+        registration
+    }
+}
+
+pub struct RecordSources {
+    state: Arc<Mutex<RecordSourcesState>>,
+    receiver: watch::Receiver<RecordSet>,
 }
 
 impl RecordSources {
-    pub async fn from_config(config: &Config) -> Self {
-        let mut sources = Self {
-            sources: Vec::new(),
-            records: SharedRecordSet::new(RecordSet::new()),
-            is_first: true,
-        };
+    pub fn new() -> Self {
+        let (sender, receiver) = watch::channel(RecordSet::new());
+        let state = RecordSourcesState::new(sender);
 
+        Self { state, receiver }
+    }
+
+    pub async fn replace_sources(&mut self, config: &Config) {
+        self.drop_sources().await;
+
+        // DHCP is assumed to not need any additional resolution.
         for (name, dhcp_config) in config.dhcp_sources() {
             log::trace!("Adding dhcp source {}", name);
-            sources
-                .add_source(dhcp::source(
-                    name.clone(),
-                    config.clone(),
-                    dhcp_config.clone(),
-                ))
-                .await;
+            let (context, pending) = self.add_source().await;
+            dhcp::source(name.clone(), config.clone(), dhcp_config.clone(), context);
+            assert!(pending.await.is_err());
         }
 
+        // Docker hostname may depend on DHCP records above.
         for (name, docker_config) in config.docker_sources() {
             log::trace!("Adding docker source {}", name);
-            sources
-                .add_source(docker::source(
-                    name.clone(),
-                    config.clone(),
-                    docker_config.clone(),
-                    sources.records.clone(),
-                ))
-                .await;
+            let (context, pending) = self.add_source().await;
+            docker::source(name.clone(), config.clone(), docker_config.clone(), context);
+            assert!(pending.await.is_err());
         }
 
+        // Traefik hostname my depend on Docker or DHCP records.
         for (name, traefik_config) in config.traefik_sources() {
             log::trace!("Adding traefik source {}", name);
-            sources
-                .add_source(traefik::source(
-                    name.clone(),
-                    traefik_config.clone(),
-                    sources.records.clone(),
-                ))
-                .await;
-        }
-
-        sources
-    }
-
-    pub async fn add_source(&mut self, mut source: RecordSource) {
-        match source.stream.next().await {
-            Some(records) => {
-                self.sources.push(Item {
-                    source,
-                    finished: false,
-                    current: records.clone(),
-                });
-                self.records.add_records(records)
-            }
-            None => self.sources.push(Item {
-                source,
-                finished: true,
-                current: RecordSet::new(),
-            }),
+            let (context, pending) = self.add_source().await;
+            traefik::source(name.clone(), traefik_config.clone(), context);
+            assert!(pending.await.is_err());
         }
     }
 
-    pub fn destroy(self) {
-        for source in self.sources {
-            source.source.abort.abort()
-        }
+    async fn add_source(&mut self) -> (SourceContext, Abortable<Pending<()>>) {
+        let (future, handle) = abortable(pending());
+        let mut state = self.state.lock().await;
+
+        (
+            SourceContext {
+                uuid: state.new_source(),
+                state: self.state.clone(),
+                record_waiter: Some(handle),
+            },
+            future,
+        )
+    }
+
+    pub fn receiver(&mut self) -> watch::Receiver<RecordSet> {
+        self.receiver.clone()
+    }
+
+    async fn drop_sources(&self) {
+        let mut state = self.state.lock().await;
+        state.abort();
+    }
+
+    pub async fn destroy(self) {
+        self.drop_sources().await;
     }
 }
 
-impl Stream for RecordSources {
-    type Item = RecordSet;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let this = self.project();
-        let mut is_new = *this.is_first;
-        let mut new_set = RecordSet::new();
-        *this.is_first = false;
-
-        for source in this.sources.iter_mut() {
-            if !source.finished {
-                match source.source.stream.poll_next_unpin(cx) {
-                    Poll::Ready(Some(set)) => {
-                        is_new = true;
-                        source.current = set.clone();
-
-                        new_set.reserve(set.len());
-                        for record in set {
-                            new_set.insert(record);
-                        }
-                    }
-                    Poll::Ready(None) => {
-                        source.finished = true;
-                        is_new = true;
-                    }
-                    Poll::Pending => {
-                        new_set.reserve(source.current.len());
-                        for record in source.current.iter() {
-                            new_set.insert(record.clone());
-                        }
-                    }
-                }
-            }
-        }
-
-        if is_new {
-            this.records.replace_records(new_set.clone());
-            Poll::Ready(Some(new_set))
-        } else {
-            Poll::Pending
-        }
+impl Default for RecordSources {
+    fn default() -> Self {
+        Self::new()
     }
 }

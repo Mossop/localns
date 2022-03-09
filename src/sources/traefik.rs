@@ -1,18 +1,18 @@
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use futures::future::Abortable;
-use reqwest::{Client, ClientBuilder, Url};
+use reqwest::{Client, Url};
 use serde::{de::DeserializeOwned, Deserialize};
-use tokio::{sync::mpsc, time::sleep};
+use tokio::time::sleep;
 
 use crate::{
     backoff::Backoff,
     config::{deserialize_url, Host},
-    record::{fqdn, Name, RData, Record, RecordSet, SharedRecordSet},
+    record::{fqdn, Name, RData, Record, RecordSet},
 };
 
-use super::{create_source, RecordSource};
+use super::SourceContext;
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub struct TraefikConfig {
@@ -179,8 +179,8 @@ fn generate_records(
 async fn traefik_loop(
     name: &str,
     traefik_config: &TraefikConfig,
-    records: &SharedRecordSet,
-    sender: &mpsc::Sender<RecordSet>,
+    client: &Client,
+    context: &mut SourceContext,
 ) -> LoopResult {
     log::trace!(
         "({}) Attempting to connect to traefik API at {}...",
@@ -188,26 +188,7 @@ async fn traefik_loop(
         traefik_config.url
     );
 
-    let mut builder = ClientBuilder::new();
-
-    if let Some(host) = traefik_config.url.host_str() {
-        match records.resolve(&Host::Name(host.to_owned())) {
-            Host::Ipv4(ip) => {
-                log::trace!("({}) Found address {} for host {}", name, ip, host);
-                builder = builder.resolve(host, SocketAddr::new(ip.into(), 0))
-            }
-            Host::Ipv6(ip) => {
-                log::trace!("({}) Found address {} for host {}", name, ip, host);
-                builder = builder.resolve(host, SocketAddr::new(ip.into(), 0))
-            }
-            _ => {}
-        }
-    }
-
-    let client = builder.build().unwrap();
-
-    let version = match api_call::<ApiVersion>(name, &client, &traefik_config.url, "version").await
-    {
+    let version = match api_call::<ApiVersion>(name, client, &traefik_config.url, "version").await {
         Ok(r) => r,
         Err(result) => return result,
     };
@@ -220,7 +201,7 @@ async fn traefik_loop(
 
     loop {
         let routers =
-            match api_call::<Vec<ApiRouter>>(name, &client, &traefik_config.url, "http/routers")
+            match api_call::<Vec<ApiRouter>>(name, client, &traefik_config.url, "http/routers")
                 .await
             {
                 Ok(r) => r,
@@ -228,32 +209,24 @@ async fn traefik_loop(
             };
 
         let records = generate_records(name, traefik_config, routers);
-        if sender.send(records).await.is_err() {
-            return LoopResult::Quit;
-        }
+        context.send(records);
 
         sleep(Duration::from_secs(30)).await;
     }
 }
 
-pub(super) fn source(
-    name: String,
-    traefik_config: TraefikConfig,
-    records: SharedRecordSet,
-) -> RecordSource {
-    let (sender, registration, source) = create_source();
+pub(super) fn source(name: String, traefik_config: TraefikConfig, mut context: SourceContext) {
+    let registration = context.abort_registration();
 
     tokio::spawn(Abortable::new(
         async move {
             let mut backoff = Backoff::default();
+            let client = Client::new();
 
             loop {
-                match traefik_loop(&name, &traefik_config, &records, &sender).await {
+                match traefik_loop(&name, &traefik_config, &client, &mut context).await {
                     LoopResult::Backoff => {
-                        if sender.send(RecordSet::new()).await.is_err() {
-                            return;
-                        }
-
+                        context.send(RecordSet::new());
                         sleep(backoff.next()).await;
                     }
                     LoopResult::Quit => {
@@ -264,6 +237,4 @@ pub(super) fn source(
         },
         registration,
     ));
-
-    source
 }

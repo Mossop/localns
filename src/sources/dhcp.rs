@@ -11,7 +11,7 @@ use crate::{
     watcher::{watch, FileEvent},
 };
 
-use super::{create_source, RecordSource};
+use super::SourceContext;
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub struct DhcpConfig {
@@ -66,10 +66,15 @@ async fn parse_file(name: &str, dhcp_config: &DhcpConfig, lease_file: &Path) -> 
     }
 }
 
-pub(super) fn source(name: String, config: Config, dhcp_config: DhcpConfig) -> RecordSource {
-    let (sender, registration, source) = create_source();
+pub(super) fn source(
+    name: String,
+    config: Config,
+    dhcp_config: DhcpConfig,
+    mut context: SourceContext,
+) {
     let lease_file = config.path(&dhcp_config.lease_file);
 
+    let registration = context.abort_registration();
     tokio::spawn(Abortable::new(
         async move {
             let records = if lease_file.exists() {
@@ -79,9 +84,7 @@ pub(super) fn source(name: String, config: Config, dhcp_config: DhcpConfig) -> R
                 RecordSet::new()
             };
 
-            if sender.send(records).await.is_err() {
-                return;
-            }
+            context.send(records);
 
             let mut stream = match watch(&lease_file) {
                 Ok(stream) => stream,
@@ -100,13 +103,9 @@ pub(super) fn source(name: String, config: Config, dhcp_config: DhcpConfig) -> R
                     _ => parse_file(&name, &dhcp_config, &lease_file).await,
                 };
 
-                if sender.send(records).await.is_err() {
-                    return;
-                }
+                context.send(records);
             }
         },
         registration,
     ));
-
-    source
 }

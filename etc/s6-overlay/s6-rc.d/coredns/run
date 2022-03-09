@@ -1,2 +1,2 @@
 #!/command/execlineb -P
-/bin/coredns -conf /etc/coredns/Corefile
+/usr/bin/coredns -conf /etc/coredns/Corefile

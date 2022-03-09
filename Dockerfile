@@ -1,23 +1,10 @@
-FROM golang:alpine as go-build
-ARG COREDNS_VERSION=1.9.0
-
-RUN \
-  apk update && \
-  apk add git make && \
-  git clone -b v${COREDNS_VERSION} https://github.com/coredns/coredns.git
-
-RUN \
-  cd coredns && \
-  make
-
 FROM rust:alpine as rust-build
+RUN apk add musl-dev
 WORKDIR /rust
-COPY Cargo.* .
+ADD bollard-stubs /rust/bollard-stubs
+COPY Cargo.* /rust/
 COPY src /rust/src
-COPY bollard-stubs /rust/bollard-stubs
-RUN apk add \
-    musl-dev && \
-  cargo build
+RUN cargo build --release
 
 FROM alpine
 ARG S6_OVERLAY_VERSION=3.0.0.2-2
@@ -26,13 +13,14 @@ ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLA
 RUN \
   tar -C / -Jxpf /tmp/s6-overlay-noarch-${S6_OVERLAY_VERSION}.tar.xz && \
   tar -C / -Jxpf /tmp/s6-overlay-x86_64-${S6_OVERLAY_VERSION}.tar.xz && \
-  rm /tmp/*.tar.xz
+  rm /tmp/*.tar.xz && \
+  apk add --no-cache coredns
 
-COPY --from=go-build /go/bin/coredns /bin/coredns
-COPY --from=rust-build /rust/target/debug/localns /bin/localns
+COPY --from=rust-build /rust/target/*/localns /bin/localns
 COPY etc /etc/
 
 ENV LOCALNS_CONFIG=/etc/localns/config.yaml
 EXPOSE 53/udp
+EXPOSE 53/tcp
 
 ENTRYPOINT ["/init"]

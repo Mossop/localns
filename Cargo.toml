@@ -24,3 +24,4 @@ uuid = { version = "^0.8.2", features = ["v4"] }
 
 [patch.crates-io]
 bollard-stubs = { path = "bollard-stubs" }
+bollard = { git = "https://github.com/fussybeaver/bollard", rev = "b75ffd3e68b3a933a55edb427a5b785c68efcba7" }

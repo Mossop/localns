@@ -94,7 +94,7 @@ impl Handler {
                             &response.answers,
                             &response.name_servers,
                             &soa,
-                            &response.name_servers,
+                            &response.additionals,
                         ))
                         .await
                 }

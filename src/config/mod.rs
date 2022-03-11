@@ -16,9 +16,10 @@ pub use file::deserialize_url;
 
 #[derive(Debug)]
 pub struct ZoneConfig {
-    pub origin: Option<Fqdn>,
+    origin: Option<Fqdn>,
     pub upstream: Option<Upstream>,
     pub ttl: u32,
+    authoritative: bool,
 }
 
 impl ZoneConfig {
@@ -27,10 +28,15 @@ impl ZoneConfig {
             origin: None,
             upstream: defaults.upstream.clone(),
             ttl: defaults.ttl.unwrap_or(300),
+            authoritative: false,
         }
     }
 
     pub fn soa(&self) -> Option<rr::Record> {
+        if !self.authoritative {
+            return None;
+        }
+
         let origin = self.origin.clone()?;
 
         Some(rr::Record::from_rdata(
@@ -57,6 +63,7 @@ impl ZoneConfig {
         if let Some(ttl) = config.ttl {
             self.ttl = ttl;
         }
+        self.authoritative = config.authoritative.unwrap_or(true);
     }
 }
 
@@ -78,7 +85,7 @@ impl Zones {
         let mut config = ZoneConfig::new(&self.defaults);
 
         for (n, c) in &self.zones {
-            if name.is_parent(name) {
+            if n.is_parent(name) {
                 config.apply_config(n.clone(), c);
             }
         }

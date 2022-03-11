@@ -14,7 +14,6 @@ pub(super) struct QueryState {
     seen: HashSet<Name>,
     unknowns: HashSet<Name>,
 
-    authoritative: bool,
     recursion_available: bool,
     response_code: ResponseCode,
 
@@ -60,10 +59,6 @@ impl QueryState {
                 self.unknowns.insert(name.clone());
             }
         }
-    }
-
-    pub fn set_authoritative(&mut self, authoritative: bool) {
-        self.authoritative = authoritative;
     }
 
     pub fn set_recursion_available(&mut self, recursion_available: bool) {
@@ -146,10 +141,10 @@ impl Server {
 
         let mut is_first = true;
         while let Some(name) = state.next_unknown() {
-            log::trace!("Lookup for {}", name);
-
             let fqdn = Fqdn::from(name.clone());
             let config = self.config.zone_config(&fqdn);
+
+            log::trace!("Lookup for {} with config {:?}", name, config);
 
             let records: Vec<rr::Record> = self
                 .records
@@ -159,8 +154,6 @@ impl Server {
 
             if !records.is_empty() {
                 if is_first {
-                    state.set_authoritative(true);
-
                     state.add_answers(records);
                     state.set_soa(config.soa())
                 } else {
@@ -174,19 +167,23 @@ impl Server {
                     if is_first {
                         state.set_response_code(response.response_code());
                         state.set_recursion_available(response.recursion_available());
-                        state.set_authoritative(response.authoritative());
 
                         state.add_answers(response.take_answers());
                         state.add_additionals(response.take_additionals());
 
-                        let name_servers = response.take_name_servers();
-                        state.set_soa(
-                            name_servers
-                                .iter()
-                                .find(|r| r.record_type() == rr::RecordType::SOA)
-                                .cloned(),
-                        );
+                        let mut name_servers: Vec<rr::Record> = Vec::new();
+                        let mut soa: Option<rr::Record> = None;
+
+                        for record in response.take_name_servers() {
+                            if record.record_type() == rr::RecordType::SOA {
+                                soa.replace(record);
+                            } else {
+                                name_servers.push(record);
+                            }
+                        }
+
                         state.add_name_servers(name_servers);
+                        state.set_soa(config.soa().or(soa));
                     } else {
                         state.add_additionals(response.take_answers());
                         state.add_additionals(response.take_additionals());

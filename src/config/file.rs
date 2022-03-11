@@ -44,7 +44,7 @@ pub(super) struct ZoneConfig {
     pub nameserver: Option<Fqdn>,
 
     #[serde(default)]
-    pub authoratative: Option<bool>,
+    pub authoritative: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

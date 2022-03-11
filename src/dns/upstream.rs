@@ -51,13 +51,6 @@ impl Upstream {
         query_class: DNSClass,
         query_type: RecordType,
     ) -> Option<DnsResponse> {
-        log::trace!(
-            "Upstream request for {} {} to {}",
-            name,
-            query_type,
-            self.config
-        );
-
         let address = match self.config.to_socket_address(53) {
             Ok(addr) => addr,
             Err(e) => {

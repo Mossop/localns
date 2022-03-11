@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use trust_dns_server::client::{
     op::{Header, LowerQuery, ResponseCode},
-    rr::{self, rdata::SOA, Name},
+    rr::{self, Name},
 };
 
 use crate::config::Config;
@@ -11,7 +11,6 @@ use super::{Fqdn, RecordSet};
 
 #[derive(Default)]
 pub(super) struct QueryState {
-    query: Name,
     seen: HashSet<Name>,
     unknowns: HashSet<Name>,
 
@@ -22,13 +21,12 @@ pub(super) struct QueryState {
     answers: Vec<rr::Record>,
     additionals: Vec<rr::Record>,
     name_servers: Vec<rr::Record>,
-    soa: Option<SOA>,
+    soa: Option<rr::Record>,
 }
 
 impl QueryState {
     pub fn new(name: Name) -> Self {
         let mut state = Self {
-            query: name.clone(),
             recursion_available: true,
             response_code: ResponseCode::NXDomain,
             ..Default::default()
@@ -51,10 +49,8 @@ impl QueryState {
         self.name_servers.iter()
     }
 
-    pub fn soa(&self) -> Option<rr::Record> {
-        self.soa
-            .as_ref()
-            .map(|soa| rr::Record::from_rdata(self.query.clone(), 300, rr::RData::SOA(soa.clone())))
+    pub fn soa(&self) -> impl Iterator<Item = &rr::Record> {
+        self.soa.iter()
     }
 
     fn add_unknowns(&mut self, record: &rr::Record) {
@@ -106,7 +102,7 @@ impl QueryState {
         self.name_servers.extend(records);
     }
 
-    pub fn set_soa(&mut self, soa: Option<SOA>) {
+    pub fn set_soa(&mut self, soa: Option<rr::Record>) {
         self.soa = soa;
     }
 
@@ -118,7 +114,7 @@ impl QueryState {
 
     pub fn header(&self, request_header: &Header) -> Header {
         let mut response_header = Header::response_from_request(request_header);
-        response_header.set_authoritative(self.authoritative);
+        response_header.set_authoritative(self.soa.is_some());
         response_header.set_recursion_available(self.recursion_available);
         response_header.set_response_code(self.response_code);
         response_header
@@ -147,8 +143,6 @@ impl Server {
     pub async fn query(&self, query: &LowerQuery, _recurse: bool) -> QueryState {
         let mut state = QueryState::new(query.name().into());
         state.set_recursion_available(true);
-
-        log::trace!("DNS query for {} type {}", query.name(), query.query_type());
 
         let mut is_first = true;
         while let Some(name) = state.next_unknown() {
@@ -184,8 +178,15 @@ impl Server {
 
                         state.add_answers(response.take_answers());
                         state.add_additionals(response.take_additionals());
-                        state.add_name_servers(response.take_name_servers());
-                        state.set_soa(response.soa());
+
+                        let name_servers = response.take_name_servers();
+                        state.set_soa(
+                            name_servers
+                                .iter()
+                                .find(|r| r.record_type() == rr::RecordType::SOA)
+                                .cloned(),
+                        );
+                        state.add_name_servers(name_servers);
                     } else {
                         state.add_additionals(response.take_answers());
                         state.add_additionals(response.take_additionals());

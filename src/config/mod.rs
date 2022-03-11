@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use tokio::sync::watch;
-use trust_dns_server::client::rr::rdata::SOA;
+use trust_dns_server::{client::rr::rdata::SOA, proto::rr};
 
 use crate::{dns::Fqdn, dns::ServerConfig, dns::Upstream, sources::SourceConfig, watcher::watch};
 
@@ -16,60 +16,46 @@ pub use file::deserialize_url;
 
 #[derive(Debug)]
 pub struct ZoneConfig {
+    pub origin: Option<Fqdn>,
     pub upstream: Option<Upstream>,
     pub ttl: u32,
-    nameserver: Fqdn,
-    pub authoratative: bool,
 }
 
 impl ZoneConfig {
-    fn new(name: &Fqdn, defaults: &file::ZoneConfig) -> Self {
+    fn new(defaults: &file::ZoneConfig) -> Self {
         Self {
+            origin: None,
             upstream: defaults.upstream.clone(),
             ttl: defaults.ttl.unwrap_or(300),
-            nameserver: defaults
-                .nameserver
-                .clone()
-                .unwrap_or_else(|| match name.domain() {
-                    Some(n) => n.child("ns"),
-                    None => name.clone().child("ns"),
-                }),
-            authoratative: defaults.authoratative.unwrap_or_default(),
         }
     }
 
-    pub fn nameserver(&self) -> &Fqdn {
-        &self.nameserver
-    }
+    pub fn soa(&self) -> Option<rr::Record> {
+        let origin = self.origin.clone()?;
 
-    pub fn hostmaster(&self) -> Fqdn {
-        self.nameserver.child("hostmaster")
-    }
-
-    pub fn soa(&self) -> Option<SOA> {
-        Some(SOA::new(
-            self.nameserver().name()?.clone(),
-            self.hostmaster().name()?.clone(),
-            0,
-            self.ttl.try_into().unwrap(),
-            self.ttl.try_into().unwrap(),
-            (self.ttl * 10).try_into().unwrap(),
-            60,
+        Some(rr::Record::from_rdata(
+            origin.name()?.clone(),
+            self.ttl,
+            rr::RData::SOA(SOA::new(
+                origin.child("ns").name()?.clone(),
+                origin.child("hostmaster").name()?.clone(),
+                0,
+                self.ttl.try_into().unwrap(),
+                self.ttl.try_into().unwrap(),
+                (self.ttl * 10).try_into().unwrap(),
+                60,
+            )),
         ))
     }
 
-    fn apply_config(&mut self, config: &file::ZoneConfig) {
+    fn apply_config(&mut self, origin: Fqdn, config: &file::ZoneConfig) {
+        self.origin = Some(origin);
+
         if let Some(ref upstream) = config.upstream {
             self.upstream = Some(upstream.clone());
         }
         if let Some(ttl) = config.ttl {
             self.ttl = ttl;
-        }
-        if let Some(ref nameserver) = config.nameserver {
-            self.nameserver = nameserver.clone();
-        }
-        if let Some(authoratative) = config.authoratative {
-            self.authoratative = authoratative;
         }
     }
 }
@@ -89,11 +75,11 @@ impl Zones {
     }
 
     fn build_config(&self, name: &Fqdn) -> ZoneConfig {
-        let mut config = ZoneConfig::new(name, &self.defaults);
+        let mut config = ZoneConfig::new(&self.defaults);
 
-        for (name, c) in &self.zones {
+        for (n, c) in &self.zones {
             if name.is_parent(name) {
-                config.apply_config(c);
+                config.apply_config(n.clone(), c);
             }
         }
 

@@ -81,7 +81,7 @@ impl RequestHandler for Handler {
                             query_result.header(request.header()),
                             query_result.answers(),
                             query_result.name_servers(),
-                            query_result.soa().iter(),
+                            query_result.soa(),
                             query_result.additionals(),
                         ))
                         .await

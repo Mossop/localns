@@ -11,8 +11,8 @@ use futures::StreamExt;
 use serde::Deserialize;
 use tokio::time::sleep;
 
-use crate::config::Address;
-use crate::record::{fqdn, RData, Record, RecordSet};
+use crate::dns::{RData, Record, RecordSet};
+use crate::util::Address;
 use crate::{backoff::Backoff, config::Config};
 
 use super::SourceContext;
@@ -270,7 +270,7 @@ fn generate_records(name: &str, state: DockerState) -> RecordSet {
                 for endpoint in container.networks.values() {
                     if &endpoint.network.name == network {
                         if let Some(ip) = endpoint.ip {
-                            records.insert(Record::new(fqdn(hostname), RData::A(ip)));
+                            records.insert(Record::new(hostname.into(), RData::A(ip)));
                             seen = true;
                         }
                     }
@@ -304,7 +304,7 @@ fn generate_records(name: &str, state: DockerState) -> RecordSet {
                             hostname
                         );
                     } else {
-                        records.insert(Record::new(fqdn(hostname), RData::A(*ip)));
+                        records.insert(Record::new(hostname.into(), RData::A(*ip)));
                     }
                 } else {
                     log::warn!(

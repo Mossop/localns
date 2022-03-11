@@ -9,7 +9,7 @@ use serde::Deserialize;
 use tokio::sync::{watch, Mutex};
 use uuid::Uuid;
 
-use crate::{config::Config, record::RecordSet};
+use crate::{config::Config, dns::RecordSet};
 
 pub mod dhcp;
 pub mod docker;
@@ -146,7 +146,7 @@ impl RecordSources {
         self.drop_sources().await;
 
         // DHCP is assumed to not need any additional resolution.
-        for (name, dhcp_config) in config.dhcp_sources() {
+        for (name, dhcp_config) in &config.sources.dhcp {
             log::trace!("Adding dhcp source {}", name);
             let (context, pending) = self.add_source().await;
             dhcp::source(name.clone(), config.clone(), dhcp_config.clone(), context);
@@ -154,7 +154,7 @@ impl RecordSources {
         }
 
         // File sources are assumed to not need any additional resolution.
-        for (name, file_config) in config.file_sources() {
+        for (name, file_config) in &config.sources.file {
             log::trace!("Adding file source {}", name);
             let (context, pending) = self.add_source().await;
             file::source(name.clone(), config.clone(), file_config.clone(), context);
@@ -162,7 +162,7 @@ impl RecordSources {
         }
 
         // Docker hostname may depend on DHCP records above.
-        for (name, docker_config) in config.docker_sources() {
+        for (name, docker_config) in &config.sources.docker {
             log::trace!("Adding docker source {}", name);
             let (context, pending) = self.add_source().await;
             docker::source(name.clone(), config.clone(), docker_config.clone(), context);
@@ -170,7 +170,7 @@ impl RecordSources {
         }
 
         // Traefik hostname my depend on Docker or DHCP records.
-        for (name, traefik_config) in config.traefik_sources() {
+        for (name, traefik_config) in &config.sources.traefik {
             log::trace!("Adding traefik source {}", name);
             let (context, pending) = self.add_source().await;
             traefik::source(name.clone(), traefik_config.clone(), context);

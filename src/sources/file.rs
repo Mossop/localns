@@ -6,11 +6,10 @@ use std::{
 
 use futures::{future::Abortable, StreamExt};
 use serde::Deserialize;
-use trust_dns_server::client::rr::Name;
 
 use crate::{
-    config::{Config, Host},
-    record::{fqdn, Record, RecordSet},
+    config::Config,
+    dns::{Fqdn, RData, Record, RecordSet},
     watcher::{watch, FileEvent},
 };
 
@@ -21,10 +20,10 @@ pub type FileConfig = PathBuf;
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum Lease {
-    Simple(Host),
+    Simple(RData),
 }
 
-type LeaseFile = HashMap<String, HashMap<String, Lease>>;
+type LeaseFile = HashMap<Fqdn, Lease>;
 
 fn parse_file(name: &str, lease_file: &Path) -> Result<RecordSet, String> {
     log::trace!("({}) Parsing lease file {}...", name, lease_file.display());
@@ -37,16 +36,9 @@ fn parse_file(name: &str, lease_file: &Path) -> Result<RecordSet, String> {
 
     let mut records = RecordSet::new();
 
-    for (zone, map) in leases {
-        let zone_name = fqdn(&zone);
-
-        for (name, lease) in map {
-            let lease_name = Name::parse(&name, Some(&zone_name))
-                .map_err(|e| format!("Failed to parse name: {}", e))?;
-
-            let Lease::Simple(host) = lease;
-            records.insert(Record::new(lease_name, host.rdata()));
-        }
+    for (name, lease) in leases {
+        let Lease::Simple(rdata) = lease;
+        records.insert(Record::new(name, rdata));
     }
 
     Ok(records)

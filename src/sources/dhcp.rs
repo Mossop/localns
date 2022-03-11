@@ -5,9 +5,8 @@ use serde::Deserialize;
 use tokio::fs::read_to_string;
 
 use crate::{
-    config::deserialize_fqdn,
     config::Config,
-    record::{rdata, Name, Record, RecordSet},
+    dns::{Fqdn, RData, Record, RecordSet},
     watcher::{watch, FileEvent},
 };
 
@@ -17,8 +16,7 @@ use super::SourceContext;
 pub struct DhcpConfig {
     lease_file: PathBuf,
 
-    #[serde(deserialize_with = "deserialize_fqdn")]
-    zone: Name,
+    zone: Fqdn,
 }
 
 fn parse_dnsmasq(dhcp_config: &DhcpConfig, data: &str) -> Option<RecordSet> {
@@ -31,9 +29,9 @@ fn parse_dnsmasq(dhcp_config: &DhcpConfig, data: &str) -> Option<RecordSet> {
         }
 
         if let (Some(name), Some(ip)) = (parts.get(3), parts.get(2)) {
-            let name = Name::parse(name, Some(&dhcp_config.zone)).unwrap();
+            let name = dhcp_config.zone.child(name);
 
-            records.insert(Record::new(name, rdata(ip)));
+            records.insert(Record::new(name, RData::from(*ip)));
         }
     }
 

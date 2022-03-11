@@ -8,8 +8,8 @@ use tokio::time::sleep;
 
 use crate::{
     backoff::Backoff,
-    config::{deserialize_url, Host},
-    record::{fqdn, Name, RData, Record, RecordSet},
+    config::deserialize_url,
+    dns::{Fqdn, RData, Record, RecordSet},
 };
 
 use super::SourceContext;
@@ -18,7 +18,7 @@ use super::SourceContext;
 pub struct TraefikConfig {
     #[serde(deserialize_with = "deserialize_url")]
     url: Url,
-    address: Option<Host>,
+    address: Option<RData>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -71,7 +71,7 @@ where
     }
 }
 
-fn parse_hosts(rule: &str) -> Result<Vec<Name>, String> {
+fn parse_hosts(rule: &str) -> Result<Vec<Fqdn>, String> {
     #[derive(Debug, PartialEq, Eq)]
     enum State {
         Pre,
@@ -101,13 +101,13 @@ fn parse_hosts(rule: &str) -> Result<Vec<Name>, String> {
             }
 
             (State::Backtick(st), '`') => {
-                hosts.push(fqdn(&st));
+                hosts.push(st.into());
                 State::Post
             }
             (State::Backtick(st), ch) => State::Backtick(format!("{}{}", st, ch)),
 
             (State::Quote(st), '"') => {
-                hosts.push(fqdn(&st));
+                hosts.push(st.into());
                 State::Post
             }
             (State::Quote(st), '\\') => State::EscapedQuote(st),
@@ -203,17 +203,15 @@ fn generate_records(
     traefik_config: &TraefikConfig,
     routers: Vec<ApiRouter>,
 ) -> RecordSet {
-    let host = if let Some(address) = &traefik_config.address {
+    let rdata = if let Some(address) = &traefik_config.address {
         address.clone()
     } else if let Some(host) = traefik_config.url.host_str() {
-        Host::from(host)
+        host.into()
     } else {
         return RecordSet::new();
     };
 
-    let rdata = host.rdata();
-
-    let mut names: Vec<Name> = routers
+    let mut names: Vec<Fqdn> = routers
         .iter()
         .filter_map(|r| match parse_hosts(&r.rule) {
             Ok(hosts) => Some(hosts),
@@ -225,7 +223,7 @@ fn generate_records(
         .flatten()
         .collect();
 
-    if let RData::CNAME(ref name) = rdata {
+    if let RData::Cname(ref name) = rdata {
         names = names.drain(..).filter(|n| n != name).collect();
     }
 

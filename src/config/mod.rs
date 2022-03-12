@@ -158,20 +158,25 @@ pub fn config_stream(args: &[String]) -> watch::Receiver<Config> {
                 continue;
             }
 
-            config = next_config;
+            match next_config {
+                Ok(ref actual_config) => {
+                    if let Err(e) = sender.send(actual_config.clone()) {
+                        log::error!("Failed to send updated config: {}", e);
+                        return;
+                    }
 
-            let actual_config = match config {
-                Ok(ref config) => config.clone(),
-                Err(ref e) => {
-                    log::error!("{}", e);
-                    Config::default(&config_file)
+                    if config.is_err() {
+                        log::info!("Successfully read new config");
+                    }
                 }
-            };
-
-            if let Err(e) = sender.send(actual_config) {
-                log::error!("Failed to send updated config: {}", e);
-                return;
+                Err(ref e) => {
+                    if config.as_ref() != Err(e) {
+                        log::error!("{}", e);
+                    }
+                }
             }
+
+            config = next_config;
         }
     });
 

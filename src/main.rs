@@ -27,17 +27,16 @@ async fn run() -> Result<(), String> {
         select! {
             result = config_stream.changed() => match result {
                 Ok(_) => {
-                    log::trace!("Saw updated configuration");
                     let config = config_stream.borrow().clone();
                     record_sources.replace_sources(&config).await;
                 },
                 Err(_) => {
-                    log::trace!("Config stream ended");
+                    log::debug!("Config stream ended");
                     break;
                 },
             },
             _ = sigterm.recv() => {
-                log::trace!("Saw SIGTERM");
+                log::debug!("Saw SIGTERM");
                 break;
             }
         }

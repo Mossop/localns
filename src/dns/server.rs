@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use trust_dns_server::client::{
-    op::{Header, LowerQuery, ResponseCode},
+    op::{Header, Query, ResponseCode},
     rr::{self, Name},
 };
 
@@ -135,8 +135,8 @@ impl Server {
         self.records = records;
     }
 
-    pub async fn query(&self, query: &LowerQuery, _recurse: bool) -> QueryState {
-        let mut state = QueryState::new(query.name().into());
+    pub async fn query(&self, query: &Query, _recurse: bool) -> QueryState {
+        let mut state = QueryState::new(query.name().clone());
         state.set_recursion_available(true);
 
         let mut is_first = true;
@@ -146,7 +146,7 @@ impl Server {
 
             let records: Vec<rr::Record> = self
                 .records
-                .lookup(&fqdn, &query.query_class(), &query.query_type())
+                .lookup(&name, query.query_class(), query.query_type())
                 .filter_map(|r| r.raw(&config))
                 .collect();
 

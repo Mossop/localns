@@ -74,7 +74,7 @@ impl RequestHandler for Handler {
             MessageType::Query => match request.op_code() {
                 OpCode::Query => {
                     let server = self.server().await;
-                    let query = request.request_info().query;
+                    let query = request.request_info().query.original();
                     let query_result = server.query(query, request.recursion_desired()).await;
                     response_handle
                         .send_response(builder.build(

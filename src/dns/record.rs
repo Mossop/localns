@@ -5,7 +5,7 @@ use std::{
     },
     fmt::{self, Display},
     hash::Hash,
-    iter::Flatten,
+    iter::{empty, once, Flatten},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     str::FromStr,
 };
@@ -24,6 +24,7 @@ pub enum RData {
     A(Ipv4Addr),
     Aaaa(Ipv6Addr),
     Cname(Fqdn),
+    Ptr(Fqdn),
 }
 
 impl RData {
@@ -32,14 +33,14 @@ impl RData {
             RData::A(_) => RecordType::A,
             RData::Aaaa(_) => RecordType::AAAA,
             RData::Cname(_) => RecordType::CNAME,
+            RData::Ptr(_) => RecordType::PTR,
         }
     }
 
     pub fn is_valid(&self) -> bool {
-        if let RData::Cname(name) = self {
-            name.is_valid()
-        } else {
-            true
+        match self {
+            RData::Cname(name) | RData::Ptr(name) => name.is_valid(),
+            _ => true,
         }
     }
 }
@@ -53,6 +54,10 @@ impl TryInto<rr::RData> for RData {
             RData::Aaaa(ip) => Ok(rr::RData::AAAA(ip)),
             RData::Cname(name) => match name {
                 Fqdn::Valid(name) => Ok(rr::RData::CNAME(name)),
+                Fqdn::Invalid(str) => Err(format!("Invalid name: {}", str)),
+            },
+            RData::Ptr(name) => match name {
+                Fqdn::Valid(name) => Ok(rr::RData::PTR(name)),
                 Fqdn::Invalid(str) => Err(format!("Invalid name: {}", str)),
             },
         }
@@ -299,6 +304,7 @@ impl Record {
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct RecordSet {
     records: HashMap<Fqdn, HashSet<Record>>,
+    reverse: HashMap<IpAddr, Record>,
 }
 
 impl RecordSet {
@@ -314,18 +320,44 @@ impl RecordSet {
         self.records.values().flatten()
     }
 
+    fn apply_records<T>(&mut self, name: &Fqdn, records: T)
+    where
+        T: Iterator<Item = Record>,
+    {
+        let inner = upsert(&mut self.records, name);
+        for record in records {
+            assert_eq!(record.name(), name);
+
+            if record.is_valid() && !inner.contains(&record) {
+                match record.rdata() {
+                    RData::A(ip) => {
+                        let mut ptr =
+                            Record::new(Name::from(*ip).into(), RData::Ptr(record.name().clone()));
+                        ptr.ttl = record.ttl;
+                        self.reverse.insert(IpAddr::from(*ip), ptr);
+                    }
+                    RData::Aaaa(ip) => {
+                        let mut ptr =
+                            Record::new(Name::from(*ip).into(), RData::Ptr(record.name().clone()));
+                        ptr.ttl = record.ttl;
+                        self.reverse.insert(IpAddr::from(*ip), ptr);
+                    }
+                    _ => {}
+                }
+
+                inner.insert(record);
+            }
+        }
+    }
+
     pub fn append(&mut self, records: RecordSet) {
         for (name, records) in records.records {
-            let our_records = upsert(&mut self.records, &name);
-            our_records.extend(records.into_iter().filter(|r| r.is_valid()));
+            self.apply_records(&name, records.into_iter());
         }
     }
 
     pub fn insert(&mut self, record: Record) {
-        if record.is_valid() {
-            let records = upsert(&mut self.records, record.name());
-            records.insert(record);
-        }
+        self.apply_records(&record.name().clone(), once(record));
     }
 
     pub fn len(&self) -> usize {
@@ -342,27 +374,35 @@ impl RecordSet {
 
     pub fn lookup(
         &self,
-        name: &Fqdn,
-        dns_class: &DNSClass,
-        query_type: &RecordType,
-    ) -> impl Iterator<Item = Record> {
-        let records = if dns_class == &DNSClass::IN {
-            match self.records.get(name) {
-                Some(records) => records
-                    .clone()
-                    .drain()
-                    .filter(|record| {
-                        let record_type = record.rdata().data_type();
-                        query_type == &record_type || record_type == RecordType::CNAME
-                    })
-                    .collect(),
-                None => Vec::new(),
-            }
-        } else {
-            Vec::new()
-        };
+        name: &Name,
+        dns_class: DNSClass,
+        query_type: RecordType,
+    ) -> Box<dyn Iterator<Item = Record> + '_> {
+        if dns_class != DNSClass::IN {
+            return Box::new(empty());
+        }
 
-        records.into_iter()
+        match query_type {
+            RecordType::PTR => Box::new(
+                name.parse_arpa_name()
+                    .ok()
+                    .and_then(|net| self.reverse.get(&net.addr()))
+                    .cloned()
+                    .into_iter(),
+            ),
+            _ => match self.records.get(&name.clone().into()) {
+                Some(records) => Box::new(
+                    records
+                        .iter()
+                        .filter(move |record| {
+                            let record_type = record.rdata().data_type();
+                            query_type == record_type || record_type == RecordType::CNAME
+                        })
+                        .cloned(),
+                ),
+                None => Box::new(empty()),
+            },
+        }
     }
 }
 

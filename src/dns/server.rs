@@ -144,8 +144,6 @@ impl Server {
             let fqdn = Fqdn::from(name.clone());
             let config = self.config.zone_config(&fqdn);
 
-            log::trace!("Lookup for {} with config {:?}", name, config);
-
             let records: Vec<rr::Record> = self
                 .records
                 .lookup(&fqdn, &query.query_class(), &query.query_type())

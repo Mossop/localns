@@ -716,6 +716,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_yaml",
+ "time 0.3.7",
  "tokio",
  "tokio-stream",
  "trust-dns-server",

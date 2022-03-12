@@ -1,5 +1,8 @@
-use flexi_logger::Logger;
+use std::io;
+
+use flexi_logger::{style, DeferredNow, Logger, Record};
 use localns::{config_stream, create_server, RecordSources};
+use time::{format_description::FormatItem, macros::format_description};
 use tokio::{
     select,
     signal::unix::{signal, SignalKind},
@@ -45,14 +48,30 @@ async fn run() -> Result<(), String> {
     Ok(())
 }
 
+pub const TIME_FORMAT: &[FormatItem<'static>] =
+    format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+
+pub fn log_format(
+    w: &mut dyn io::Write,
+    now: &mut DeferredNow,
+    record: &Record,
+) -> Result<(), io::Error> {
+    let level = record.level();
+    write!(
+        w,
+        "[{}] {} [{}] {}",
+        style(level).paint(now.format(TIME_FORMAT)),
+        style(level).paint(format!("{:5}", level.to_string())),
+        record.module_path().unwrap_or("<unnamed>"),
+        style(level).paint(&record.args().to_string())
+    )
+}
+
 #[tokio::main]
 async fn main() {
-    let logger = match Logger::try_with_env_or_str("info") {
-        Ok(logger) => logger,
-        Err(e) => panic!("Failed to start logging: {}", e),
-    };
-
-    if let Err(e) = logger.start() {
+    if let Err(e) =
+        Logger::try_with_env_or_str("info").and_then(|logger| logger.format(log_format).start())
+    {
         panic!("Failed to start logging: {}", e);
     }
 

@@ -67,6 +67,14 @@ impl Upstream {
             }
         };
 
+        log::trace!(
+            "Upstream request to {} for {} class {} type {}",
+            address,
+            name,
+            query_class,
+            query_type
+        );
+
         match client.query(name.clone(), query_class, query_type).await {
             Ok(response) => Some(response),
             Err(e) => {

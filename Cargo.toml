@@ -10,12 +10,10 @@ bollard = { version = "^0.11.1", features = ["ssl"] }
 log = "^0.4.14"
 flexi_logger = { version = "^0.22.3", features = ["colors"] }
 tokio = { version = "1.17.0", features = ["full"] }
-tokio-stream = { version = "^0.1.8", features = ["sync"] }
 serde = "^1.0.136"
 serde_yaml = "^0.8.23"
 futures = "^0.3.21"
 pin-project-lite = "^0.2.8"
-chrono = "^0.4.19"
 reqwest = { version = "^0.11.9", default-features = false, features = ["json", "rustls-tls"] }
 notify = "^4.0.17"
 trust-dns-server = "^0.21.1"

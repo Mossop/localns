@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use futures::future::Abortable;
 use reqwest::{Client, Url};
 use serde::{de::DeserializeOwned, Deserialize};
@@ -33,8 +32,6 @@ struct ApiVersion {
     version: String,
     #[serde(rename = "Codename")]
     _code_name: String,
-    #[serde(rename = "startDate")]
-    _start_date: DateTime<Utc>,
 }
 
 enum LoopResult {

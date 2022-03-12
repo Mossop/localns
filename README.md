@@ -19,29 +19,29 @@ lease files. Others should be straightforward to add.
 Configuration is done via a yaml file located at `/etc/localns/config.yaml`:
 
 ```yaml
-upstream: 1.1.1.1
 sources:
   docker:
     local: {}
+
 zones:
   myzone.local:
     upstream: 10.10.10.254
   myotherzone.local:
-    authoratative: true
+    authoritative: false
+
+defaults:
+  upstream: 1.1.1.1
 ```
 
-The root upstream is the default for all detected zones and will be used when
-queried for zones not known locally. It is optional.
+The sources key lists the different sources of records, see below for more
+details.
 
-The sources key lists the different sources of records, see below.
+The zones key allows for marking zones as authoratative and for providing
+upstream DNS servers for finding records not known locally. The server will
+claim authority over any zones listed (unless disabled).
 
-The zones key allows for fine-tuning of zone configuration. Zones will still be
-generated for domains not listed here when records are discovered, they will
-just use the default values.
-
-For each zone you can set an upstream (if not set the top-level upstream is
-used) or you can mark the zone as authoratative in which case no querying
-upstream for unknown records will occur.
+The default upstream is the default for any requests where a zone hasn't
+specified its own upstream.
 
 ## Sources
 
@@ -63,3 +63,7 @@ host records for all of the known http services.
 
 Attempts to read hosts from a dhcp lease file (currently dnsmasq format is
 supported).
+
+### file
+
+Reads DNS records from a yaml file.

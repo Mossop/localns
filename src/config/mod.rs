@@ -1,7 +1,7 @@
 use futures::StreamExt;
 use std::{
     collections::HashMap,
-    env,
+    env, fmt,
     fs::File,
     path::{Path, PathBuf},
 };
@@ -14,7 +14,6 @@ mod file;
 
 pub use file::deserialize_url;
 
-#[derive(Debug)]
 pub struct ZoneConfig {
     origin: Option<Fqdn>,
     pub upstream: Option<Upstream>,
@@ -64,6 +63,24 @@ impl ZoneConfig {
             self.ttl = ttl;
         }
         self.authoritative = config.authoritative.unwrap_or(true);
+    }
+}
+
+impl fmt::Debug for ZoneConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(ref origin) = self.origin {
+            parts.push(format!("origin={}", origin));
+        }
+
+        parts.push(format!("ttl={}", self.ttl));
+        parts.push(format!("authoritative={}", self.authoritative));
+
+        if let Some(ref upstream) = self.upstream {
+            parts.push(format!("upstream={:?}", upstream));
+        }
+
+        f.pad(&format!("[{}]", parts.join(" ")))
     }
 }
 

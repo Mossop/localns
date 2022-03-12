@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{fmt, net::SocketAddr};
 
 use serde::Deserialize;
 use tokio::net::UdpSocket;
@@ -26,10 +26,16 @@ async fn connect_client(address: SocketAddr) -> Result<AsyncClient, String> {
     Ok(client)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(from = "UpstreamConfig")]
 pub struct Upstream {
     config: UpstreamConfig,
+}
+
+impl fmt::Debug for Upstream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad(&format!("{}", self.config))
+    }
 }
 
 impl From<UpstreamConfig> for Upstream {

@@ -136,6 +136,13 @@ impl Server {
     }
 
     pub async fn query(&self, query: &Query, _recurse: bool) -> QueryState {
+        log::debug!(
+            "Starting new query for {} class {} type {}",
+            query.name(),
+            query.query_class(),
+            query.query_type()
+        );
+
         let mut state = QueryState::new(query.name().clone());
         state.set_recursion_available(true);
 
@@ -143,6 +150,7 @@ impl Server {
         while let Some(name) = state.next_unknown() {
             let fqdn = Fqdn::from(name.clone());
             let config = self.config.zone_config(&fqdn);
+            log::trace!("Searching for {} with config {:?}", name, config);
 
             let records: Vec<rr::Record> = self
                 .records

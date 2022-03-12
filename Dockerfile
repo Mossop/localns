@@ -3,6 +3,11 @@ RUN apk add musl-dev
 WORKDIR /rust
 ADD bollard-stubs /rust/bollard-stubs
 COPY Cargo.* /rust/
+RUN \
+  mkdir src && \
+  echo "fn main() {}" > src/main.rs && \
+  cargo build --release && \
+  rm -rf src
 COPY src /rust/src
 RUN cargo build --release
 

@@ -1,16 +1,20 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Instant};
 
-use trust_dns_server::client::{
-    op::{Header, Query, ResponseCode},
-    rr::{self, Name},
+use trust_dns_server::{
+    client::{
+        op::{Header, Query, ResponseCode},
+        rr::{self, Name},
+    },
+    server::Request,
 };
 
 use crate::config::Config;
 
 use super::{Fqdn, RecordSet};
 
-#[derive(Default)]
-pub(super) struct QueryState {
+pub(super) struct QueryContext<'a> {
+    request: &'a Request,
+
     seen: HashSet<Name>,
     unknowns: HashSet<Name>,
 
@@ -23,17 +27,31 @@ pub(super) struct QueryState {
     soa: Option<rr::Record>,
 }
 
-impl QueryState {
-    pub fn new(name: Name) -> Self {
-        let mut state = Self {
+impl<'a> QueryContext<'a> {
+    pub fn new(request: &'a Request) -> Self {
+        let mut context = Self {
+            request,
+
+            seen: HashSet::new(),
+            unknowns: HashSet::new(),
+
             recursion_available: true,
             response_code: ResponseCode::NoError,
-            ..Default::default()
+
+            answers: Vec::new(),
+            additionals: Vec::new(),
+            name_servers: Vec::new(),
+            soa: None,
         };
 
-        state.seen.insert(name.clone());
-        state.unknowns.insert(name);
-        state
+        let name = context.query().name().clone();
+        context.seen.insert(name.clone());
+        context.unknowns.insert(name);
+        context
+    }
+
+    fn query(&self) -> &Query {
+        self.request.request_info().query.original()
     }
 
     pub fn answers(&self) -> impl Iterator<Item = &rr::Record> {
@@ -114,6 +132,98 @@ impl QueryState {
         response_header.set_response_code(self.response_code);
         response_header
     }
+
+    pub async fn perform_query(&mut self, server: &Server) {
+        let start = Instant::now();
+
+        let mut is_first = true;
+        let query_class = self.query().query_class();
+        let query_type = self.query().query_type();
+
+        while let Some(name) = self.next_unknown() {
+            let fqdn = Fqdn::from(name.clone());
+            let config = server.config.zone_config(&fqdn);
+            log::trace!("Searching for {} with config {:?}", name, config);
+
+            let records: Vec<rr::Record> = server
+                .records
+                .lookup(&name, query_class, query_type)
+                .filter_map(|r| r.raw(&config))
+                .collect();
+
+            if !records.is_empty() {
+                if is_first {
+                    self.add_answers(records);
+                    self.set_soa(config.soa())
+                } else {
+                    self.add_additionals(records);
+                }
+            } else if let Some(upstream) = &config.upstream {
+                if let Some(mut response) = upstream
+                    .lookup(self.request.id(), &name, query_class, query_type)
+                    .await
+                {
+                    if is_first {
+                        if response.response_code() != ResponseCode::NXDomain {
+                            self.set_response_code(response.response_code());
+                        }
+
+                        self.set_recursion_available(response.recursion_available());
+
+                        self.add_answers(response.take_answers());
+                        self.add_additionals(response.take_additionals());
+
+                        let mut name_servers: Vec<rr::Record> = Vec::new();
+                        let mut soa: Option<rr::Record> = None;
+
+                        for record in response.take_name_servers() {
+                            if record.record_type() == rr::RecordType::SOA {
+                                soa.replace(record);
+                            } else {
+                                name_servers.push(record);
+                            }
+                        }
+
+                        self.add_name_servers(name_servers);
+                        self.set_soa(config.soa().or(soa));
+                    } else {
+                        self.add_additionals(response.take_answers());
+                        self.add_additionals(response.take_additionals());
+                    }
+                }
+            }
+
+            is_first = false;
+        }
+
+        let request_info = self.request.request_info();
+        let mut rflags = Vec::new();
+        if self.soa.is_some() {
+            rflags.push("AA");
+        }
+        if self.recursion_available {
+            rflags.push("RA");
+        }
+
+        let duration = Instant::now() - start;
+
+        log::debug!("({id}) Query src:{proto}://{addr}#{port} {query}:{qtype}:{class} qflags:{qflags} response:{code:?} rr:{answers}/{authorities}/{additionals} rflags:{rflags} ms:{duration}",
+            id = self.request.id(),
+            proto = request_info.protocol,
+            addr = request_info.src.ip(),
+            port = request_info.src.port(),
+            query = self.query().name(),
+            qtype = self.query().query_type(),
+            class = self.query().query_class(),
+            qflags = request_info.header.flags(),
+            code = self.response_code,
+            answers = self.answers.len(),
+            authorities = self.name_servers.len(),
+            additionals = self.additionals.len(),
+            rflags = rflags.join(","),
+            duration = duration.as_millis(),
+        );
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -133,76 +243,5 @@ impl Server {
 
     pub fn update_records(&mut self, records: RecordSet) {
         self.records = records;
-    }
-
-    pub async fn query(&self, query: &Query, _recurse: bool) -> QueryState {
-        log::debug!(
-            "Starting new query for {} class {} type {}",
-            query.name(),
-            query.query_class(),
-            query.query_type()
-        );
-
-        let mut state = QueryState::new(query.name().clone());
-        state.set_recursion_available(true);
-
-        let mut is_first = true;
-        while let Some(name) = state.next_unknown() {
-            let fqdn = Fqdn::from(name.clone());
-            let config = self.config.zone_config(&fqdn);
-            log::trace!("Searching for {} with config {:?}", name, config);
-
-            let records: Vec<rr::Record> = self
-                .records
-                .lookup(&name, query.query_class(), query.query_type())
-                .filter_map(|r| r.raw(&config))
-                .collect();
-
-            if !records.is_empty() {
-                if is_first {
-                    state.add_answers(records);
-                    state.set_soa(config.soa())
-                } else {
-                    state.add_additionals(records);
-                }
-            } else if let Some(upstream) = &config.upstream {
-                if let Some(mut response) = upstream
-                    .lookup(&name, query.query_class(), query.query_type())
-                    .await
-                {
-                    if is_first {
-                        if response.response_code() != ResponseCode::NXDomain {
-                            state.set_response_code(response.response_code());
-                        }
-
-                        state.set_recursion_available(response.recursion_available());
-
-                        state.add_answers(response.take_answers());
-                        state.add_additionals(response.take_additionals());
-
-                        let mut name_servers: Vec<rr::Record> = Vec::new();
-                        let mut soa: Option<rr::Record> = None;
-
-                        for record in response.take_name_servers() {
-                            if record.record_type() == rr::RecordType::SOA {
-                                soa.replace(record);
-                            } else {
-                                name_servers.push(record);
-                            }
-                        }
-
-                        state.add_name_servers(name_servers);
-                        state.set_soa(config.soa().or(soa));
-                    } else {
-                        state.add_additionals(response.take_answers());
-                        state.add_additionals(response.take_additionals());
-                    }
-                }
-            }
-
-            is_first = false;
-        }
-
-        state
     }
 }

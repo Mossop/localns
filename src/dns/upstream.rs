@@ -1,4 +1,4 @@
-use std::{fmt, net::SocketAddr};
+use std::{fmt, net::SocketAddr, time::Instant};
 
 use serde::Deserialize;
 use tokio::net::UdpSocket;
@@ -53,10 +53,13 @@ impl Upstream {
 
     pub async fn lookup(
         &self,
+        id: u16,
         name: &Name,
         query_class: DNSClass,
         query_type: RecordType,
     ) -> Option<DnsResponse> {
+        let start = Instant::now();
+
         let address = match self.config.to_socket_address(53) {
             Ok(addr) => addr,
             Err(e) => {
@@ -73,16 +76,25 @@ impl Upstream {
             }
         };
 
-        log::trace!(
-            "Upstream request to {} for {} class {} type {}",
-            address,
-            name,
-            query_class,
-            query_type
+        match client.query(name.clone(), query_class, query_type).await {
+            Ok(response) => {
+                let duration = Instant::now() - start;
+                log::debug!("({id}) Upstream UDP://{addr} {query}:{qtype}:{class} response:{code:?} rr:{answers}/{authorities}/{additionals} rflags:{rflags} ms:{duration}",
+            id = id,
+            addr = address,
+            query = name,
+            qtype = query_type,
+            class = query_class,
+            code = response.response_code(),
+            answers = response.answer_count(),
+            authorities = response.name_server_count(),
+            additionals = response.additional_count(),
+            rflags = response.flags(),
+            duration = duration.as_millis(),
         );
 
-        match client.query(name.clone(), query_class, query_type).await {
-            Ok(response) => Some(response),
+                Some(response)
+            }
             Err(e) => {
                 log::warn!("Upstream DNS server returned error: {}", e);
                 None

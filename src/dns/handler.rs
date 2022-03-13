@@ -7,7 +7,7 @@ use trust_dns_server::{
     server::{Request, RequestHandler, ResponseHandler, ResponseInfo},
 };
 
-use super::server::Server;
+use super::server::{QueryContext, Server};
 
 fn serve_failed() -> ResponseInfo {
     let mut header = Header::new();
@@ -74,15 +74,16 @@ impl RequestHandler for Handler {
             MessageType::Query => match request.op_code() {
                 OpCode::Query => {
                     let server = self.server().await;
-                    let query = request.request_info().query.original();
-                    let query_result = server.query(query, request.recursion_desired()).await;
+                    let mut context = QueryContext::new(request);
+                    context.perform_query(&server).await;
+
                     response_handle
                         .send_response(builder.build(
-                            query_result.header(request.header()),
-                            query_result.answers(),
-                            query_result.name_servers(),
-                            query_result.soa(),
-                            query_result.additionals(),
+                            context.header(request.header()),
+                            context.answers(),
+                            context.name_servers(),
+                            context.soa(),
+                            context.additionals(),
                         ))
                         .await
                 }

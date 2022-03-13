@@ -8,7 +8,10 @@ use std::{
 use tokio::sync::watch;
 use trust_dns_server::{client::rr::rdata::SOA, proto::rr};
 
-use crate::{dns::Fqdn, dns::ServerConfig, dns::Upstream, sources::SourceConfig, watcher::watch};
+use crate::{
+    api::ApiConfig, dns::Fqdn, dns::ServerConfig, dns::Upstream, sources::SourceConfig,
+    watcher::watch,
+};
 
 mod file;
 
@@ -115,6 +118,7 @@ impl Zones {
 pub struct Config {
     pub config_file: PathBuf,
     pub server: ServerConfig,
+    pub api: Option<ApiConfig>,
     pub sources: SourceConfig,
     zones: Zones,
 }
@@ -130,6 +134,7 @@ impl Config {
         Ok(Config {
             config_file: config_file.to_owned(),
             server: config.server,
+            api: config.api,
             sources: config.sources,
             zones: Zones::new(config.defaults, config.zones),
         })

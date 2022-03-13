@@ -5,11 +5,10 @@ use std::{
 };
 
 use futures::{future::Abortable, StreamExt};
-use serde::Deserialize;
 
 use crate::{
     config::Config,
-    dns::{Fqdn, RData, Record, RecordSet},
+    dns::{Fqdn, RDataConfig, Record, RecordSet},
     watcher::{watch, FileEvent},
 };
 
@@ -17,13 +16,7 @@ use super::SourceContext;
 
 pub type FileConfig = PathBuf;
 
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum Lease {
-    Simple(RData),
-}
-
-type LeaseFile = HashMap<Fqdn, Lease>;
+type LeaseFile = HashMap<Fqdn, RDataConfig>;
 
 fn parse_file(name: &str, lease_file: &Path) -> Result<RecordSet, String> {
     log::trace!("({}) Parsing lease file {}...", name, lease_file.display());
@@ -36,9 +29,8 @@ fn parse_file(name: &str, lease_file: &Path) -> Result<RecordSet, String> {
 
     let mut records = RecordSet::new();
 
-    for (name, lease) in leases {
-        let Lease::Simple(rdata) = lease;
-        records.insert(Record::new(name, rdata));
+    for (name, rdata) in leases {
+        records.insert(Record::new(name, rdata.into()));
     }
 
     Ok(records)

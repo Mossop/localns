@@ -14,6 +14,7 @@ use crate::{config::Config, dns::RecordSet};
 pub mod dhcp;
 pub mod docker;
 pub mod file;
+pub mod remote;
 pub mod traefik;
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
@@ -29,6 +30,9 @@ pub struct SourceConfig {
 
     #[serde(default)]
     pub file: HashMap<String, file::FileConfig>,
+
+    #[serde(default)]
+    pub remote: HashMap<String, remote::RemoteConfig>,
 }
 
 #[derive(Clone, Hash)]
@@ -174,6 +178,14 @@ impl RecordSources {
             log::trace!("Adding traefik source {}", name);
             let (context, pending) = self.add_source().await;
             traefik::source(name.clone(), traefik_config.clone(), context);
+            assert!(pending.await.is_err());
+        }
+
+        // Remote hostname my depend on anything.
+        for (name, remote_config) in &config.sources.remote {
+            log::trace!("Adding remote source {}", name);
+            let (context, pending) = self.add_source().await;
+            remote::source(name.clone(), remote_config.clone(), context);
             assert!(pending.await.is_err());
         }
     }

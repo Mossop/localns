@@ -10,7 +10,7 @@ use std::{
     str::FromStr,
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use trust_dns_server::{
     client::rr::{DNSClass, LowerName, Name, RecordType},
     proto::rr,
@@ -18,8 +18,7 @@ use trust_dns_server::{
 
 use crate::{config::ZoneConfig, util::upsert};
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash)]
-#[serde(from = "String")]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Hash)]
 pub enum RData {
     A(Ipv4Addr),
     Aaaa(Ipv6Addr),
@@ -118,8 +117,25 @@ impl From<&str> for RData {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Deserialize, Eq, PartialEq, Debug, Clone)]
+#[serde(untagged)]
+pub enum RDataConfig {
+    Simple(String),
+    RData(RData),
+}
+
+impl From<RDataConfig> for RData {
+    fn from(config: RDataConfig) -> RData {
+        match config {
+            RDataConfig::Simple(str) => str.into(),
+            RDataConfig::RData(rdata) => rdata,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(from = "String")]
+#[serde(into = "String")]
 pub enum Fqdn {
     Valid(Name),
     Invalid(String),
@@ -196,6 +212,12 @@ impl Display for Fqdn {
     }
 }
 
+impl From<Fqdn> for String {
+    fn from(fqdn: Fqdn) -> String {
+        fqdn.to_string()
+    }
+}
+
 impl From<&LowerName> for Fqdn {
     fn from(name: &LowerName) -> Self {
         assert!(name.is_fqdn());
@@ -255,9 +277,22 @@ impl From<&str> for Fqdn {
     }
 }
 
-#[derive(Debug, PartialEq, Hash, Eq, Clone, Deserialize)]
+#[derive(Debug, PartialEq, Hash, Eq, Clone)]
+pub enum RecordSource {
+    Local,
+    Remote,
+}
+
+fn remote_source() -> RecordSource {
+    RecordSource::Remote
+}
+
+#[derive(Debug, PartialEq, Hash, Eq, Clone, Deserialize, Serialize)]
 pub struct Record {
     name: Fqdn,
+    #[serde(skip)]
+    #[serde(default = "remote_source")]
+    pub source: RecordSource,
     pub ttl: Option<u32>,
     rdata: RData,
 }
@@ -273,6 +308,7 @@ impl Record {
         Self {
             name,
             rdata,
+            source: RecordSource::Local,
             ttl: None,
         }
     }
@@ -301,7 +337,9 @@ impl Record {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Clone)]
+#[derive(Debug, Default, PartialEq, Eq, Clone, Deserialize, Serialize)]
+#[serde(from = "Vec<Record>")]
+#[serde(into = "Vec<Record>")]
 pub struct RecordSet {
     records: HashMap<Fqdn, HashSet<Record>>,
     reverse: HashMap<IpAddr, Record>,
@@ -445,5 +483,17 @@ impl Extend<RecordSet> for RecordSet {
         for records in iter {
             self.append(records);
         }
+    }
+}
+
+impl From<Vec<Record>> for RecordSet {
+    fn from(records: Vec<Record>) -> Self {
+        Self::from_iter(records)
+    }
+}
+
+impl From<RecordSet> for Vec<Record> {
+    fn from(records: RecordSet) -> Vec<Record> {
+        records.into_iter().collect()
     }
 }

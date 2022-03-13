@@ -6,7 +6,7 @@ use serde::{
     Deserialize, Deserializer,
 };
 
-use crate::{dns::Fqdn, dns::ServerConfig, dns::Upstream, sources::SourceConfig};
+use crate::{api::ApiConfig, dns::Fqdn, dns::ServerConfig, dns::Upstream, sources::SourceConfig};
 
 struct UrlVisitor;
 
@@ -51,6 +51,9 @@ pub(super) struct ZoneConfig {
 pub(super) struct ConfigFile {
     #[serde(default)]
     pub defaults: ZoneConfig,
+
+    #[serde(default)]
+    pub api: Option<ApiConfig>,
 
     #[serde(default)]
     pub server: ServerConfig,

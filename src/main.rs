@@ -1,7 +1,7 @@
 use std::io;
 
 use flexi_logger::{style, DeferredNow, Logger, Record};
-use localns::{config_stream, create_server, RecordSources};
+use localns::{config_stream, create_api_server, create_server, RecordSources};
 use time::{format_description::FormatItem, macros::format_description};
 use tokio::{
     select,
@@ -15,6 +15,7 @@ async fn run() -> Result<(), String> {
     let mut record_sources = RecordSources::new();
 
     create_server(config_stream.clone(), record_sources.receiver());
+    create_api_server(config_stream.clone(), record_sources.receiver());
 
     record_sources
         .replace_sources(&config_stream.borrow_and_update())

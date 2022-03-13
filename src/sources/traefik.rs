@@ -8,7 +8,7 @@ use tokio::time::sleep;
 use crate::{
     backoff::Backoff,
     config::deserialize_url,
-    dns::{Fqdn, RData, Record, RecordSet},
+    dns::{Fqdn, RData, RDataConfig, Record, RecordSet},
 };
 
 use super::SourceContext;
@@ -17,7 +17,7 @@ use super::SourceContext;
 pub struct TraefikConfig {
     #[serde(deserialize_with = "deserialize_url")]
     url: Url,
-    address: Option<RData>,
+    address: Option<RDataConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -201,7 +201,7 @@ fn generate_records(
     routers: Vec<ApiRouter>,
 ) -> RecordSet {
     let rdata = if let Some(address) = &traefik_config.address {
-        address.clone()
+        address.clone().into()
     } else if let Some(host) = traefik_config.url.host_str() {
         host.into()
     } else {

@@ -17,7 +17,7 @@ use crate::config::Config;
 
 use self::{handler::Handler, server::Server};
 
-pub use record::{Fqdn, RData, Record, RecordSet};
+pub use record::{Fqdn, RData, RDataConfig, Record, RecordSet, RecordSource};
 pub use upstream::Upstream;
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]

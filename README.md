@@ -67,3 +67,7 @@ supported).
 ### file
 
 Reads DNS records from a yaml file.
+
+### remote
+
+Reads DNS records from a remote instance of localns.

@@ -27,7 +27,7 @@ impl QueryState {
     pub fn new(name: Name) -> Self {
         let mut state = Self {
             recursion_available: true,
-            response_code: ResponseCode::NXDomain,
+            response_code: ResponseCode::NoError,
             ..Default::default()
         };
 
@@ -171,7 +171,10 @@ impl Server {
                     .await
                 {
                     if is_first {
-                        state.set_response_code(response.response_code());
+                        if response.response_code() != ResponseCode::NXDomain {
+                            state.set_response_code(response.response_code());
+                        }
+
                         state.set_recursion_available(response.recursion_available());
 
                         state.add_answers(response.take_answers());

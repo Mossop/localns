@@ -427,6 +427,7 @@ impl RecordSet {
         name: &Name,
         dns_class: DNSClass,
         query_type: RecordType,
+        recurse: bool,
     ) -> Box<dyn Iterator<Item = Record> + '_> {
         if dns_class != DNSClass::IN {
             return Box::new(empty());
@@ -446,7 +447,8 @@ impl RecordSet {
                         .iter()
                         .filter(move |record| {
                             let record_type = record.rdata().data_type();
-                            query_type == record_type || record_type == RecordType::CNAME
+                            query_type == record_type
+                                || (record_type == RecordType::CNAME && recurse)
                         })
                         .cloned(),
                 ),

@@ -72,10 +72,12 @@ impl<'a> QueryContext<'a> {
     }
 
     fn add_unknowns(&mut self, record: &rr::Record) {
-        if let Some(rr::RData::CNAME(ref name)) = record.data() {
-            if !self.seen.contains(name) {
-                self.seen.insert(name.clone());
-                self.unknowns.insert(name.clone());
+        if self.request.recursion_desired() {
+            if let Some(rr::RData::CNAME(ref name)) = record.data() {
+                if !self.seen.contains(name) {
+                    self.seen.insert(name.clone());
+                    self.unknowns.insert(name.clone());
+                }
             }
         }
     }
@@ -85,23 +87,17 @@ impl<'a> QueryContext<'a> {
             self.response_code = ResponseCode::NoError;
         }
 
-        for record in records {
+        for record in &records {
             self.seen.insert(record.name().clone());
             self.unknowns.remove(record.name());
-            self.add_unknowns(&record);
-
-            self.answers.push(record);
+            self.add_unknowns(record);
         }
+
+        self.answers.extend(records);
     }
 
     pub fn add_additionals(&mut self, records: Vec<rr::Record>) {
-        for record in records {
-            self.seen.insert(record.name().clone());
-            self.unknowns.remove(record.name());
-            self.add_unknowns(&record);
-
-            self.additionals.push(record);
-        }
+        self.additionals.extend(records);
     }
 
     pub fn add_name_servers(&mut self, records: Vec<rr::Record>) {
@@ -128,6 +124,7 @@ impl<'a> QueryContext<'a> {
         let mut is_first = true;
         let query_class = self.query().query_class();
         let query_type = self.query().query_type();
+        let recurse = self.request.recursion_desired();
 
         while let Some(name) = self.next_unknown() {
             let fqdn = Fqdn::from(name.clone());
@@ -136,18 +133,17 @@ impl<'a> QueryContext<'a> {
 
             let records: Vec<rr::Record> = server
                 .records
-                .lookup(&name, query_class, query_type)
+                .lookup(&name, query_class, query_type, recurse)
                 .filter_map(|r| r.raw(&config))
                 .collect();
 
             if !records.is_empty() {
                 if is_first {
                     self.response_code = ResponseCode::NoError;
-                    self.add_answers(records);
                     self.soa = config.soa();
-                } else {
-                    self.add_additionals(records);
                 }
+
+                self.add_answers(records);
             } else if let Some(upstream) = &config.upstream {
                 if let Some(mut response) = upstream
                     .lookup(self.request.id(), &name, query_class, query_type)

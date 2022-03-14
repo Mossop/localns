@@ -245,7 +245,9 @@ fn visible_networks(state: &DockerState) -> HashSet<String> {
         .networks
         .iter()
         .filter_map(|(k, network)| {
-            if let Some(ref driver) = network.driver {
+            if Some(&"true".to_owned()) == network.labels.get("localns.exposed") {
+                Some(k.to_owned())
+            } else if let Some(ref driver) = network.driver {
                 match driver.as_str() {
                     "host" | "macvlan" | "ipvlan" => Some(k.to_owned()),
                     _ => None,

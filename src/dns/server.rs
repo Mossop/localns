@@ -1,5 +1,6 @@
 use std::{collections::HashSet, time::Instant};
 
+use log::Level;
 use trust_dns_server::{
     client::{
         op::{Header, Query, ResponseCode},
@@ -79,14 +80,6 @@ impl<'a> QueryContext<'a> {
         }
     }
 
-    pub fn set_recursion_available(&mut self, recursion_available: bool) {
-        self.recursion_available = recursion_available;
-    }
-
-    pub fn set_response_code(&mut self, response_code: ResponseCode) {
-        self.response_code = response_code;
-    }
-
     pub fn add_answers(&mut self, records: Vec<rr::Record>) {
         if !records.is_empty() && self.response_code == ResponseCode::NXDomain {
             self.response_code = ResponseCode::NoError;
@@ -113,10 +106,6 @@ impl<'a> QueryContext<'a> {
 
     pub fn add_name_servers(&mut self, records: Vec<rr::Record>) {
         self.name_servers.extend(records);
-    }
-
-    pub fn set_soa(&mut self, soa: Option<rr::Record>) {
-        self.soa = soa;
     }
 
     pub fn next_unknown(&mut self) -> Option<Name> {
@@ -153,8 +142,9 @@ impl<'a> QueryContext<'a> {
 
             if !records.is_empty() {
                 if is_first {
+                    self.response_code = ResponseCode::NoError;
                     self.add_answers(records);
-                    self.set_soa(config.soa())
+                    self.soa = config.soa();
                 } else {
                     self.add_additionals(records);
                 }
@@ -164,11 +154,18 @@ impl<'a> QueryContext<'a> {
                     .await
                 {
                     if is_first {
-                        if response.response_code() != ResponseCode::NXDomain {
-                            self.set_response_code(response.response_code());
+                        match response.response_code() {
+                            ResponseCode::NXDomain => {
+                                if server.records.has_name(&name) {
+                                    self.response_code = ResponseCode::NoError;
+                                } else {
+                                    self.response_code = ResponseCode::NXDomain;
+                                }
+                            }
+                            code => self.response_code = code,
                         }
 
-                        self.set_recursion_available(response.recursion_available());
+                        self.recursion_available = response.recursion_available();
 
                         self.add_answers(response.take_answers());
                         self.add_additionals(response.take_additionals());
@@ -185,7 +182,7 @@ impl<'a> QueryContext<'a> {
                         }
 
                         self.add_name_servers(name_servers);
-                        self.set_soa(config.soa().or(soa));
+                        self.soa = config.soa().or(soa);
                     } else {
                         self.add_additionals(response.take_answers());
                         self.add_additionals(response.take_additionals());
@@ -207,7 +204,13 @@ impl<'a> QueryContext<'a> {
 
         let duration = Instant::now() - start;
 
-        log::debug!("({id}) Query src:{proto}://{addr}#{port} {query}:{qtype}:{class} qflags:{qflags} response:{code:?} rr:{answers}/{authorities}/{additionals} rflags:{rflags} ms:{duration}",
+        let level = match self.response_code {
+            ResponseCode::NoError => Level::Trace,
+            ResponseCode::NXDomain => Level::Debug,
+            _ => Level::Warn,
+        };
+
+        log::log!(level, "({id}) Query src:{proto}://{addr}#{port} {query}:{qtype}:{class} qflags:{qflags} response:{code:?} rr:{answers}/{authorities}/{additionals} rflags:{rflags} ms:{duration}",
             id = self.request.id(),
             proto = request_info.protocol,
             addr = request_info.src.ip(),

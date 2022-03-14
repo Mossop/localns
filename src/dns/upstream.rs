@@ -1,11 +1,12 @@
 use std::{fmt, net::SocketAddr, time::Instant};
 
+use log::Level;
 use serde::Deserialize;
 use tokio::net::UdpSocket;
 use trust_dns_server::client::{
     client::AsyncClient,
     client::ClientHandle,
-    op::DnsResponse,
+    op::{DnsResponse, ResponseCode},
     rr::{DNSClass, Name, RecordType},
     udp::UdpClientStream,
 };
@@ -78,20 +79,25 @@ impl Upstream {
 
         match client.query(name.clone(), query_class, query_type).await {
             Ok(response) => {
+                let level = match response.response_code() {
+                    ResponseCode::NoError | ResponseCode::NXDomain => Level::Trace,
+                    _ => Level::Warn,
+                };
+
                 let duration = Instant::now() - start;
-                log::debug!("({id}) Upstream UDP://{addr} {query}:{qtype}:{class} response:{code:?} rr:{answers}/{authorities}/{additionals} rflags:{rflags} ms:{duration}",
-            id = id,
-            addr = address,
-            query = name,
-            qtype = query_type,
-            class = query_class,
-            code = response.response_code(),
-            answers = response.answer_count(),
-            authorities = response.name_server_count(),
-            additionals = response.additional_count(),
-            rflags = response.flags(),
-            duration = duration.as_millis(),
-        );
+                log::log!(level, "({id}) Upstream UDP://{addr} {query}:{qtype}:{class} response:{code:?} rr:{answers}/{authorities}/{additionals} rflags:{rflags} ms:{duration}",
+                    id = id,
+                    addr = address,
+                    query = name,
+                    qtype = query_type,
+                    class = query_class,
+                    code = response.response_code(),
+                    answers = response.answer_count(),
+                    authorities = response.name_server_count(),
+                    additionals = response.additional_count(),
+                    rflags = response.flags(),
+                    duration = duration.as_millis(),
+                );
 
                 Some(response)
             }

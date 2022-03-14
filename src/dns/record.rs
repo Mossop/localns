@@ -1,6 +1,6 @@
 use std::{
     collections::{
-        hash_map::{IntoValues, Keys, Values},
+        hash_map::{IntoValues, Values},
         HashMap, HashSet,
     },
     fmt::{self, Display},
@@ -343,6 +343,7 @@ impl Record {
 pub struct RecordSet {
     records: HashMap<Fqdn, HashSet<Record>>,
     reverse: HashMap<IpAddr, Record>,
+    names: HashSet<Name>,
 }
 
 impl RecordSet {
@@ -350,8 +351,8 @@ impl RecordSet {
         Default::default()
     }
 
-    pub fn names(&self) -> Keys<Fqdn, HashSet<Record>> {
-        self.records.keys()
+    pub fn has_name(&self, name: &Name) -> bool {
+        self.names.contains(name)
     }
 
     pub fn records(&self) -> Flatten<Values<Fqdn, HashSet<Record>>> {
@@ -362,6 +363,17 @@ impl RecordSet {
     where
         T: Iterator<Item = Record>,
     {
+        if let Some(mut name) = name.name().cloned() {
+            self.names.insert(name.clone());
+            while name.num_labels() > 1 {
+                name = name.trim_to(name.num_labels() as usize - 1);
+                self.names.insert(name.clone());
+            }
+        } else {
+            // Invalid name, skip.
+            return;
+        }
+
         let inner = upsert(&mut self.records, name);
         for record in records {
             assert_eq!(record.name(), name);

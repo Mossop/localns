@@ -30,7 +30,7 @@ impl From<Host> for RData {
 impl Display for Host {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Host::Name(st) => f.pad(&st.to_string()),
+            Host::Name(st) => f.pad(st.to_string().trim_end_matches('.')),
             Host::Ipv4(ip) => f.pad(&ip.to_string()),
             Host::Ipv6(ip) => f.pad(&ip.to_string()),
         }

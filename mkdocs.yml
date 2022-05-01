@@ -1,0 +1,4 @@
+site_name: localns
+theme:
+  name: readthedocs
+repo_url: https://github.com/Mossop/localns

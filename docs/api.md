@@ -4,6 +4,9 @@ LocalNS can be configured to expose a very minimal HTTP API. This is really only
 for the [remote source](sources/remote.md) functionality right now but can also
 be useful for diagnosing issues.
 
+There is absolutely no security to this API. It returns the known DNS records
+to anything that can access it so maybe don't expose it on the public internet.
+
 For the time being the API should be considered to be unstable.
 
 The API is enabled by adding something like the following to the configuration

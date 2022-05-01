@@ -1,4 +1,14 @@
-site_name: localns
+site_name: LocalNS
 theme:
   name: readthedocs
 repo_url: https://github.com/Mossop/localns
+nav:
+  - 'index.md'
+  - 'configuration.md'
+  - 'api.md'
+  - 'Sources':
+    - 'sources/file.md'
+    - 'sources/docker.md'
+    - 'sources/traefik.md'
+    - 'sources/dhcp.md'
+    - 'sources/remote.md'

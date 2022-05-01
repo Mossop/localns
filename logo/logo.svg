@@ -28,8 +28,8 @@
      fit-margin-right="0"
      fit-margin-bottom="0"
      inkscape:zoom="0.64482093"
-     inkscape:cx="328.77345"
-     inkscape:cy="462.91922"
+     inkscape:cx="40.321272"
+     inkscape:cy="481.52903"
      inkscape:window-width="1728"
      inkscape:window-height="1051"
      inkscape:window-x="0"
@@ -83,13 +83,13 @@
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;font-size:60.6778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
-       x="73.361259"
+       x="61.509193"
        y="170.45935"
        id="text13022"><tspan
          sodipodi:role="line"
          id="tspan13020"
          style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:60.6778px;font-family:'Marker Felt';-inkscape-font-specification:'Marker Felt';stroke-width:0.264583"
-         x="73.361259"
-         y="170.45935">localns</tspan></text>
+         x="61.509193"
+         y="170.45935">LocalNS</tspan></text>
   </g>
 </svg>

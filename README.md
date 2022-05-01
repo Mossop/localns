@@ -1,4 +1,4 @@
-# localns
+# LocalNS
 
 <p align="center" width="100%">
   <img src="logo/logo256.png">
@@ -6,74 +6,28 @@
 
 [![Documentation Status](https://readthedocs.org/projects/localns/badge/?version=latest)](https://localns.readthedocs.io/en/latest/?badge=latest)
 
-This is a DNS server running in a docker container that serves DNS records
-generated from a number of sources optionally with upstream servers serving
-anything unknown. It support split-horizon DNS so that local IPs can be served
-for local servers when the public authoratative nameserver serves a different
-IP.
+LocalNS is a DNS server that serves records for names discovered from various
+sources such as [Docker](https://www.docker.com/) and [Traefik](https://traefik.io/traefik/).
+It is designed to need minimal configuration and will dynamically update as
+names known to the sources change. When a record is not known it will fall
+back to an upstream DNS server.
 
-I am building this to solve some complexity I am facing on my local network
-where I want DNS served for various local docker containers and other services.
+Put in a more practical way. If you run a bunch of containers in docker on a
+network that is accessible then this will act as a nameserver, automatically
+mapping names you define to whatever IP docker happens to pick when the
+container starts. And docker is just one such source of names supported.
 
-With no configuration the server will serve nothing. You must add sources of DNS
-records and optionally an upstream for everything else. A number of sources will
-be supported starting with docker containers, traefik instances and dnsmasq
-lease files. Others should be straightforward to add.
+Unlike many other DNS servers LocalNS does not work on a zone by zone basis and
+does not (unless configured to do so) claim to be the authority for any domain.
+Instead the configured sources provide known names and if LocalNS is asked to
+resolve a name it knows of it will respond. For anything else the query is
+forwarded to upstream servers. This allows for internal services to use the same
+domain name as other public services and allows LocalNS to respond with an
+internal address for a name that also has a public address, a split horizon
+configuration.
 
-## Configuration
+LocalNS is probably not production ready however it is running without issue as
+the main name server for my own local network so is reasonably stable.
 
-Configuration is done via a yaml file located at `/etc/localns/config.yaml`:
-
-```yaml
-sources:
-  docker:
-    local: {}
-
-zones:
-  myzone.local:
-    upstream: 10.10.10.254
-  myotherzone.local:
-    authoritative: false
-
-defaults:
-  upstream: 1.1.1.1
-```
-
-The sources key lists the different sources of records, see below for more
-details.
-
-The zones key allows for marking zones as authoratative and for providing
-upstream DNS servers for finding records not known locally. The server will
-claim authority over any zones listed (unless disabled).
-
-The default upstream is the default for any requests where a zone hasn't
-specified its own upstream.
-
-## Sources
-
-Each source type allows for listing a number of sources with a name (mainly
-used for logging) and a configuration.
-
-### docker
-
-Serves records based on docker containers. Once connected to a docker server
-it watches for containers to start and stop. Any containers with the label
-`localns.hostname` have a DNS record generated.
-
-### traefik
-
-Connects to a [Traefik](https://doc.traefik.io/traefik/) instance and creates
-host records for all of the known http services.
-
-### dhcp
-
-Attempts to read hosts from a dhcp lease file (currently dnsmasq format is
-supported).
-
-### file
-
-Reads DNS records from a yaml file.
-
-### remote
-
-Reads DNS records from a remote instance of localns.
+[Read the documentation](https://localns.readthedocs.io/en/latest) for more on
+how to install and use LocalNS.

@@ -1,7 +1,6 @@
 FROM rust:alpine as rust-build
 RUN apk add musl-dev
 WORKDIR /rust
-ADD bollard-stubs /rust/bollard-stubs
 COPY Cargo.* /rust/
 RUN \
   mkdir src && \

@@ -95,7 +95,7 @@ pub struct Container {
 
 impl Container {
     fn try_from(
-        state: models::ContainerSummaryInner,
+        state: models::ContainerSummary,
         networks: &HashMap<String, Network>,
     ) -> Result<Self, String> {
         let container_networks = match state.network_settings {
@@ -139,8 +139,10 @@ fn check_file(file: &Path) -> Result<(), String> {
     }
 }
 
-fn useful_event(ev: &models::SystemEventsResponse) -> bool {
-    if let (Some("container"), Some(action)) = (ev.typ.as_deref(), ev.action.as_deref()) {
+fn useful_event(ev: &models::EventMessage) -> bool {
+    if let (Some(models::EventMessageTypeEnum::CONTAINER), Some(action)) =
+        (ev.typ, ev.action.as_deref())
+    {
         if let Some(pos) = action.find(':') {
             !matches!(&action[..pos], "exec_create" | "exec_start")
         } else {

@@ -1,3 +1,2 @@
-upstream:
-  address: 127.0.0.1
-  port: 58
+defaults:
+  upstream: 127.0.0.1:58

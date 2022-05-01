@@ -1,5 +1,9 @@
 # localns
 
+<p align="center" width="100%">
+  <img src="logo/logo256.png">
+</p>
+
 This is a DNS server running in a docker container that serves DNS records
 generated from a number of sources optionally with upstream servers serving
 anything unknown. It support split-horizon DNS so that local IPs can be served

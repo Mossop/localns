@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="245mm"
+   height="175mm"
+   viewBox="0 0 245 175"
+   version="1.1"
+   id="svg5"
+   inkscape:version="1.1.2 (b8e25be8, 2022-02-05)"
+   sodipodi:docname="logo.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview7"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:pageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:document-units="mm"
+     showgrid="false"
+     fit-margin-top="0"
+     fit-margin-left="0"
+     fit-margin-right="0"
+     fit-margin-bottom="0"
+     inkscape:zoom="0.64482093"
+     inkscape:cx="328.77345"
+     inkscape:cy="462.91922"
+     inkscape:window-width="1728"
+     inkscape:window-height="1051"
+     inkscape:window-x="0"
+     inkscape:window-y="38"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1" />
+  <defs
+     id="defs2" />
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-35.524338,-32.219749)">
+    <rect
+       style="fill:#dc4d3e;fill-opacity:1;fill-rule:evenodd;stroke:none;stroke-width:0.264583;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       id="rect31"
+       width="245"
+       height="175"
+       x="35.524338"
+       y="32.219749"
+       ry="10.847917" />
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:25.4px;line-height:1.25;font-family:sans-serif;letter-spacing:-1.32292px;fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="128.26906"
+       y="66.517799"
+       id="text2132"><tspan
+         sodipodi:role="line"
+         id="tspan2130"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:25.4px;font-family:sans-serif;-inkscape-font-specification:sans-serif;fill:#ffffff;stroke-width:0.264583"
+         x="128.26906"
+         y="66.517799">Hello</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:19.7556px;line-height:1.25;font-family:sans-serif;letter-spacing:-1.32292px;fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="105.54026"
+       y="88.245476"
+       id="text2664"><tspan
+         sodipodi:role="line"
+         id="tspan2662"
+         style="font-size:19.7556px;fill:#ffffff;stroke-width:0.264583"
+         x="105.54026"
+         y="88.245476">my name is</tspan></text>
+    <rect
+       style="fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.267008;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       id="rect12362"
+       width="215"
+       height="90"
+       x="50.524338"
+       y="102.21975" />
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:60.6778px;line-height:1.25;font-family:sans-serif;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       x="73.361259"
+       y="170.45935"
+       id="text13022"><tspan
+         sodipodi:role="line"
+         id="tspan13020"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:60.6778px;font-family:'Marker Felt';-inkscape-font-specification:'Marker Felt';stroke-width:0.264583"
+         x="73.361259"
+         y="170.45935">localns</tspan></text>
+  </g>
+</svg>

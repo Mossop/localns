@@ -4,6 +4,8 @@
   <img src="logo/logo256.png">
 </p>
 
+[![Documentation Status](https://readthedocs.org/projects/localns/badge/?version=latest)](https://localns.readthedocs.io/en/latest/?badge=latest)
+
 This is a DNS server running in a docker container that serves DNS records
 generated from a number of sources optionally with upstream servers serving
 anything unknown. It support split-horizon DNS so that local IPs can be served

@@ -1,6 +1,12 @@
 [package]
 name = "localns"
+description = "Serves DNS records for all of your local services."
 version = "1.0.0"
+authors = ["Dave Townsend <dtownsend@oxymoronical.com>"]
+documentation = "https://localns.readthedocs.io/en/latest/"
+repository = "https://github.com/Mossop/localns"
+homepage = "https://github.com/Mossop/localns"
+license = "MIT"
 edition = "2021"
 default-run = "localns"
 

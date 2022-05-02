@@ -5,6 +5,7 @@
 </p>
 
 [![Documentation Status](https://readthedocs.org/projects/localns/badge/?version=latest)](https://localns.readthedocs.io/en/latest/?badge=latest)
+[![Tests](https://github.com/Mossop/localns/actions/workflows/test.yml/badge.svg)](https://github.com/Mossop/localns/actions/workflows/test.yml)
 
 LocalNS is a DNS server that serves records for names discovered from various
 sources such as [Docker](https://www.docker.com/) and [Traefik](https://traefik.io/traefik/).

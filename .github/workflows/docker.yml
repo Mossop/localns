@@ -1,7 +1,10 @@
 name: Build container
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - "*"
 
 jobs:
   build-container:

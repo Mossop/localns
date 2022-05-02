@@ -2,6 +2,9 @@ name: Build container
 
 on:
   workflow_dispatch: {}
+  push:
+    tags:
+      - latest
 
 jobs:
   build-container:

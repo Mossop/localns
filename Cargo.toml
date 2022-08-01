@@ -22,7 +22,7 @@ pin-project-lite = "^0.2.8"
 reqwest = { version = "^0.11.9", default-features = false, features = ["json", "rustls-tls"] }
 notify = "^4.0.17"
 trust-dns-server = "^0.21.1"
-async-trait = "^0.1.52"
+async-trait = "^0.1.57"
 uuid = { version = "^1.0.0", features = ["v4"] }
 time = "^0.3.7"
 actix-web = "^4.0.1"

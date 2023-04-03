@@ -15,7 +15,7 @@ bollard = { version = "^0.14.0", features = ["ssl"] }
 log = "^0.4.17"
 flexi_logger = { version = "^0.23.3", features = ["colors"] }
 tokio = { version = "1.20.4", features = ["full"] }
-serde = "^1.0.158"
+serde = "^1.0.159"
 serde_yaml = "^0.8.24"
 futures = "^0.3.21"
 pin-project-lite = "^0.2.8"

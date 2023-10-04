@@ -1132,7 +1132,7 @@ checksum = "902eb695eb0591864543cbfbf6d742510642a605a61fc5e97fe6ceb5a30ac4fb"
 
 [[package]]
 name = "localns"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "actix-web",
  "async-trait",

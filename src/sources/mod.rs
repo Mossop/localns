@@ -173,7 +173,7 @@ impl RecordSources {
             assert!(pending.await.is_err());
         }
 
-        // Traefik hostname my depend on Docker or DHCP records.
+        // Traefik hostname may depend on Docker or DHCP records.
         for (name, traefik_config) in &config.sources.traefik {
             log::trace!("Adding traefik source {}", name);
             let (context, pending) = self.add_source().await;

@@ -69,6 +69,16 @@ where
 }
 
 fn parse_hosts(rule: &str) -> Result<Vec<Fqdn>, String> {
+    let mut hosts: Vec<Fqdn> = Vec::new();
+
+    for item in rule.split("||") {
+        hosts.extend(parse_single_host(item.trim())?);
+    }
+
+    Ok(hosts)
+}
+
+fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, String> {
     #[derive(Debug, PartialEq, Eq)]
     enum State {
         Pre,
@@ -289,6 +299,26 @@ mod tests {
                 "phpmyadmin.cloud.oxymoronical.com.",
                 "postfixadmin.cloud.oxymoronical.com."
             ]
+        );
+
+        assert_eq!(
+            do_parse("Host(`allthethings.dev`)||Host(`foo.example.com`)"),
+            vec!["allthethings.dev.", "foo.example.com."]
+        );
+
+        assert_eq!(
+            do_parse("Host(`allthethings.dev`) ||Host(`foo.example.com`)"),
+            vec!["allthethings.dev.", "foo.example.com."]
+        );
+
+        assert_eq!(
+            do_parse("Host(`allthethings.dev`)|| Host(`foo.example.com`)"),
+            vec!["allthethings.dev.", "foo.example.com."]
+        );
+
+        assert_eq!(
+            do_parse("Host(`allthethings.dev`) || Host(`foo.example.com`)"),
+            vec!["allthethings.dev.", "foo.example.com."]
         );
     }
 }

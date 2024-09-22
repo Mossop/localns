@@ -63,7 +63,7 @@ pub fn log_format(
         style(level).paint(now.format(TIME_FORMAT)),
         style(level).paint(format!("{:5}", level.to_string())),
         record.module_path().unwrap_or("<unnamed>"),
-        style(level).paint(&record.args().to_string())
+        style(level).paint(record.args().to_string())
     )
 }
 

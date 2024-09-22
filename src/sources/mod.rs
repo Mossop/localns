@@ -35,9 +35,6 @@ pub struct SourceConfig {
     pub remote: HashMap<String, remote::RemoteConfig>,
 }
 
-#[derive(Clone, Hash)]
-struct SourceKey;
-
 struct RecordSourcesState {
     sources: HashMap<Uuid, RecordSource>,
     sender: watch::Sender<RecordSet>,

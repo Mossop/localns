@@ -300,7 +300,7 @@ fn generate_records(name: &str, state: DockerState) -> RecordSet {
                     })
                     .collect();
 
-                if let Some(ip) = possible_ips.get(0) {
+                if let Some(ip) = possible_ips.first() {
                     if possible_ips.len() > 1 {
                         log::warn!(
                             "({}) Cannot add record for {} as it is present on multiple possible networks.",

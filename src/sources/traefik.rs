@@ -136,65 +136,6 @@ fn parse_hosts(rule: &str) -> Result<Vec<Fqdn>, String> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn parse_hosts() {
-        fn do_parse(rule: &str) -> Vec<String> {
-            super::parse_hosts(rule)
-                .expect("Should be no parse error")
-                .iter()
-                .map(|n| n.to_string())
-                .collect::<Vec<String>>()
-        }
-
-        assert_eq!(
-            do_parse("Host(`allthethings.dev`)"),
-            vec!["allthethings.dev."]
-        );
-
-        assert_eq!(
-            do_parse("Host(   `allthethings.dev`  )"),
-            vec!["allthethings.dev."]
-        );
-
-        assert_eq!(
-            do_parse("Host(   \"allthethings.dev\")"),
-            vec!["allthethings.dev."]
-        );
-
-        assert_eq!(
-            do_parse("Host(`allthethings.dev`,`foo.example.com`)"),
-            vec!["allthethings.dev.", "foo.example.com."]
-        );
-
-        assert_eq!(
-            do_parse("Host(`allthethings.dev`, `foo.example.com`)"),
-            vec!["allthethings.dev.", "foo.example.com."]
-        );
-
-        assert_eq!(
-            do_parse("Host(`allthethings.dev` , `foo.example.com`)"),
-            vec!["allthethings.dev.", "foo.example.com."]
-        );
-
-        assert_eq!(
-            do_parse("Host(`allthethings.dev`, `foo.example.com`)"),
-            vec!["allthethings.dev.", "foo.example.com."]
-        );
-
-        assert_eq!(
-            do_parse(
-                "Host(`phpmyadmin.cloud.oxymoronical.com`,`postfixadmin.cloud.oxymoronical.com`,)"
-            ),
-            vec![
-                "phpmyadmin.cloud.oxymoronical.com.",
-                "postfixadmin.cloud.oxymoronical.com."
-            ]
-        );
-    }
-}
-
 fn generate_records(
     name: &str,
     traefik_config: &TraefikConfig,
@@ -291,4 +232,63 @@ pub(super) fn source(name: String, traefik_config: TraefikConfig, mut context: S
         },
         registration,
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parse_hosts() {
+        fn do_parse(rule: &str) -> Vec<String> {
+            super::parse_hosts(rule)
+                .expect("Should be no parse error")
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<String>>()
+        }
+
+        assert_eq!(
+            do_parse("Host(`allthethings.dev`)"),
+            vec!["allthethings.dev."]
+        );
+
+        assert_eq!(
+            do_parse("Host(   `allthethings.dev`  )"),
+            vec!["allthethings.dev."]
+        );
+
+        assert_eq!(
+            do_parse("Host(   \"allthethings.dev\")"),
+            vec!["allthethings.dev."]
+        );
+
+        assert_eq!(
+            do_parse("Host(`allthethings.dev`,`foo.example.com`)"),
+            vec!["allthethings.dev.", "foo.example.com."]
+        );
+
+        assert_eq!(
+            do_parse("Host(`allthethings.dev`, `foo.example.com`)"),
+            vec!["allthethings.dev.", "foo.example.com."]
+        );
+
+        assert_eq!(
+            do_parse("Host(`allthethings.dev` , `foo.example.com`)"),
+            vec!["allthethings.dev.", "foo.example.com."]
+        );
+
+        assert_eq!(
+            do_parse("Host(`allthethings.dev`, `foo.example.com`)"),
+            vec!["allthethings.dev.", "foo.example.com."]
+        );
+
+        assert_eq!(
+            do_parse(
+                "Host(`phpmyadmin.cloud.oxymoronical.com`,`postfixadmin.cloud.oxymoronical.com`,)"
+            ),
+            vec![
+                "phpmyadmin.cloud.oxymoronical.com.",
+                "postfixadmin.cloud.oxymoronical.com."
+            ]
+        );
+    }
 }

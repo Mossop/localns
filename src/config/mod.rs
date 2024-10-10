@@ -158,7 +158,7 @@ impl Config {
 
 pub fn config_stream(args: &[String]) -> watch::Receiver<Config> {
     let config_file = config_file(args.get(1));
-    log::info!("Reading configuration from {}.", config_file.display());
+    tracing::info!("Reading configuration from {}.", config_file.display());
     let mut file_stream = watch(&config_file).unwrap();
 
     let mut config = Config::from_file(&config_file);
@@ -166,7 +166,7 @@ pub fn config_stream(args: &[String]) -> watch::Receiver<Config> {
     let (sender, receiver) = watch::channel(match config {
         Ok(ref c) => c.clone(),
         Err(ref e) => {
-            log::error!("{}", e);
+            tracing::error!("{}", e);
             Config::default(&config_file)
         }
     });
@@ -183,17 +183,17 @@ pub fn config_stream(args: &[String]) -> watch::Receiver<Config> {
             match next_config {
                 Ok(ref actual_config) => {
                     if let Err(e) = sender.send(actual_config.clone()) {
-                        log::error!("Failed to send updated config: {}", e);
+                        tracing::error!("Failed to send updated config: {}", e);
                         return;
                     }
 
                     if config.is_err() {
-                        log::info!("Successfully read new config");
+                        tracing::info!("Successfully read new config");
                     }
                 }
                 Err(ref e) => {
                     if config.as_ref() != Err(e) {
-                        log::error!("{}", e);
+                        tracing::error!("{}", e);
                     }
                 }
             }

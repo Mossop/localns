@@ -157,7 +157,7 @@ fn connect(name: &str, config: &Config, docker_config: &DockerConfig) -> Result<
     match docker_config {
         DockerConfig::Address(address) => {
             if address.starts_with("http://") {
-                log::trace!(
+                tracing::trace!(
                     "({}) Attempting to connect to docker daemon at {}...",
                     name,
                     address
@@ -165,7 +165,7 @@ fn connect(name: &str, config: &Config, docker_config: &DockerConfig) -> Result<
                 Docker::connect_with_http(address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)
                     .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
             } else {
-                log::trace!(
+                tracing::trace!(
                     "({}) Attempting to connect to docker daemon at {}...",
                     name,
                     address
@@ -175,7 +175,7 @@ fn connect(name: &str, config: &Config, docker_config: &DockerConfig) -> Result<
             }
         }
         DockerConfig::Local(_) => {
-            log::trace!("({}) Attempting to connect to local docker daemon...", name);
+            tracing::trace!("({}) Attempting to connect to local docker daemon...", name);
 
             Docker::connect_with_local_defaults()
                 .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
@@ -188,7 +188,7 @@ fn connect(name: &str, config: &Config, docker_config: &DockerConfig) -> Result<
             let ca = config.path(&tls_config.ca);
             check_file(&ca)?;
 
-            log::trace!(
+            tracing::trace!(
                 "({}) Attempting to connect to docker daemon at https://{}/...",
                 name,
                 tls_config.address.address(2376)
@@ -281,7 +281,7 @@ fn generate_records(name: &str, state: DockerState) -> RecordSet {
                 }
 
                 if !seen {
-                    log::warn!(
+                    tracing::warn!(
                         "({}) Cannot add record for {} as its 'localns.network' label references an invalid network.",
                         name,
                         hostname
@@ -302,7 +302,7 @@ fn generate_records(name: &str, state: DockerState) -> RecordSet {
 
                 if let Some(ip) = possible_ips.first() {
                     if possible_ips.len() > 1 {
-                        log::warn!(
+                        tracing::warn!(
                             "({}) Cannot add record for {} as it is present on multiple possible networks.",
                             name,
                             hostname
@@ -311,7 +311,7 @@ fn generate_records(name: &str, state: DockerState) -> RecordSet {
                         records.insert(Record::new(hostname.into(), RData::A(*ip)));
                     }
                 } else {
-                    log::warn!(
+                    tracing::warn!(
                         "({}) Cannot add record for {} as none of its networks appeared usable.",
                         name,
                         hostname
@@ -338,7 +338,7 @@ async fn docker_loop(
     let docker = match connect(name, config, docker_config) {
         Ok(docker) => docker,
         Err(e) => {
-            log::error!("({}) {}", name, e);
+            tracing::error!("({}) {}", name, e);
             return LoopResult::Backoff;
         }
     };
@@ -346,25 +346,25 @@ async fn docker_loop(
     let version = match docker.version().await {
         Ok(version) => version,
         Err(e) => {
-            log::error!("({}) Failed to get docker version: {}", name, e);
+            tracing::error!("({}) Failed to get docker version: {}", name, e);
             return LoopResult::Backoff;
         }
     };
 
     match (version.version, version.api_version) {
-        (Some(v), Some(a)) => log::debug!(
+        (Some(v), Some(a)) => tracing::debug!(
             "({}) Connected to docker daemon version {} (API {:?}).",
             name,
             v,
             a
         ),
-        _ => log::debug!("({}) Connected to docker daemon.", name),
+        _ => tracing::debug!("({}) Connected to docker daemon.", name),
     }
 
     let state = match fetch_state(&docker).await {
         Ok(state) => state,
         Err(e) => {
-            log::error!("({}) {}", name, e);
+            tracing::error!("({}) {}", name, e);
             return LoopResult::Backoff;
         }
     };
@@ -380,7 +380,7 @@ async fn docker_loop(
                     let state = match fetch_state(&docker).await {
                         Ok(state) => state,
                         Err(e) => {
-                            log::error!("({}) {}", name, e);
+                            tracing::error!("({}) {}", name, e);
                             return LoopResult::Backoff;
                         }
                     };

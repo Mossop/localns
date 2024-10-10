@@ -48,7 +48,7 @@ impl RequestHandler for Handler {
             builder.edns(resp_edns);
 
             if req_edns.version() > our_version {
-                log::warn!(
+                tracing::warn!(
                     "Request edns version greater than {}: {}",
                     our_version,
                     req_edns.version()
@@ -62,7 +62,7 @@ impl RequestHandler for Handler {
                 // couldn't handle the request
                 return match result {
                     Err(e) => {
-                        log::error!("request error: {}", e);
+                        tracing::error!("request error: {}", e);
                         serve_failed()
                     }
                     Ok(info) => info,
@@ -88,14 +88,14 @@ impl RequestHandler for Handler {
                         .await
                 }
                 c => {
-                    log::warn!("Unimplemented op_code: {:?}", c);
+                    tracing::warn!("Unimplemented op_code: {:?}", c);
                     response_handle
                         .send_response(builder.error_msg(request.header(), ResponseCode::NotImp))
                         .await
                 }
             },
             MessageType::Response => {
-                log::warn!("got a response as a request from id: {}", request.id());
+                tracing::warn!("got a response as a request from id: {}", request.id());
                 response_handle
                     .send_response(builder.error_msg(request.header(), ResponseCode::FormErr))
                     .await
@@ -104,7 +104,7 @@ impl RequestHandler for Handler {
 
         match result {
             Err(e) => {
-                log::error!("Request failed: {}", e);
+                tracing::error!("Request failed: {}", e);
                 serve_failed()
             }
             Ok(info) => info,

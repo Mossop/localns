@@ -12,8 +12,6 @@ default-run = "localns"
 
 [dependencies]
 bollard = { version = "^0.17.1", features = ["ssl"] }
-log = "^0.4.17"
-flexi_logger = { version = "^0.23.3", features = ["colors"] }
 tokio = { version = "1.20.4", features = ["full"] }
 serde = "^1.0.171"
 serde_yaml = "^0.9.34"
@@ -24,6 +22,7 @@ hickory-server = "^0.24.1"
 hickory-client = "^0.24.1"
 async-trait = "^0.1.83"
 uuid = { version = "^1.4.0", features = ["v4"] }
-time = "^0.3.20"
 actix-web = "^4.3.1"
 debounced = "^0.2.0"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }

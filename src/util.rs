@@ -168,3 +168,16 @@ where
 
     map.get_mut(key).unwrap()
 }
+
+#[macro_export]
+macro_rules! event_lvl {
+    ($lvl:ident, $($arg:tt)+) => {
+        match $lvl {
+            ::tracing::Level::TRACE => ::tracing::trace!($($arg)+),
+            ::tracing::Level::DEBUG => ::tracing::debug!($($arg)+),
+            ::tracing::Level::INFO => ::tracing::info!($($arg)+),
+            ::tracing::Level::WARN => ::tracing::warn!($($arg)+),
+            ::tracing::Level::ERROR => ::tracing::error!($($arg)+),
+        }
+    };
+}

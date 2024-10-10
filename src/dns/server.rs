@@ -7,9 +7,9 @@ use hickory_server::{
     },
     server::Request,
 };
-use log::Level;
+use tracing::Level;
 
-use crate::config::Config;
+use crate::{config::Config, event_lvl};
 
 use super::{Fqdn, RecordSet};
 
@@ -129,7 +129,7 @@ impl<'a> QueryContext<'a> {
         while let Some(name) = self.next_unknown() {
             let fqdn = Fqdn::from(name.clone());
             let config = server.config.zone_config(&fqdn);
-            log::trace!("Searching for {} with config {:?}", name, config);
+            tracing::trace!("Searching for {} with config {:?}", name, config);
 
             let records: Vec<rr::Record> = server
                 .records
@@ -203,26 +203,28 @@ impl<'a> QueryContext<'a> {
         let duration = Instant::now() - start;
 
         let level = match self.response_code {
-            ResponseCode::NoError => Level::Trace,
-            ResponseCode::NXDomain => Level::Debug,
-            _ => Level::Warn,
+            ResponseCode::NoError => Level::TRACE,
+            ResponseCode::NXDomain => Level::DEBUG,
+            _ => Level::WARN,
         };
 
-        log::log!(level, "({id}) Query src:{proto}://{addr}#{port} {query}:{qtype}:{class} qflags:{qflags} response:{code:?} rr:{answers}/{authorities}/{additionals} rflags:{rflags} ms:{duration}",
+        event_lvl!(
+            level,
             id = self.request.id(),
-            proto = request_info.protocol,
-            addr = request_info.src.ip(),
+            protocol = request_info.protocol.to_string(),
+            address = request_info.src.ip().to_string(),
             port = request_info.src.port(),
-            query = self.query().name(),
-            qtype = self.query().query_type(),
-            class = self.query().query_class(),
-            qflags = request_info.header.flags(),
-            code = self.response_code,
+            query = self.query().name().to_string(),
+            qtype = self.query().query_type().to_string(),
+            class = self.query().query_class().to_string(),
+            qflags = request_info.header.flags().to_string(),
+            code = self.response_code.to_string(),
             answers = self.answers.len(),
             authorities = self.name_servers.len(),
             additionals = self.additionals.len(),
             rflags = rflags.join(","),
-            duration = duration.as_millis(),
+            duration_ms = duration.as_millis(),
+            "DNS Query"
         );
     }
 }

@@ -43,7 +43,7 @@ fn parse_dnsmasq(dhcp_config: &DhcpConfig, data: &str) -> Option<RecordSet> {
 }
 
 async fn parse_file(name: &str, dhcp_config: &DhcpConfig, lease_file: &Path) -> RecordSet {
-    log::trace!(
+    tracing::trace!(
         "({}) Parsing dhcp lease file {}...",
         name,
         lease_file.display()
@@ -52,7 +52,7 @@ async fn parse_file(name: &str, dhcp_config: &DhcpConfig, lease_file: &Path) -> 
     let data = match read_to_string(lease_file).await {
         Ok(s) => s,
         Err(e) => {
-            log::error!("({}) Failed to read lease file: {}", name, e);
+            tracing::error!("({}) Failed to read lease file: {}", name, e);
             return RecordSet::new();
         }
     };
@@ -78,7 +78,7 @@ pub(super) fn source(
             let records = if lease_file.exists() {
                 parse_file(&name, &dhcp_config, &lease_file).await
             } else {
-                log::warn!("({}) dhcp file {} is missing.", name, lease_file.display());
+                tracing::warn!("({}) dhcp file {} is missing.", name, lease_file.display());
                 RecordSet::new()
             };
 
@@ -87,7 +87,7 @@ pub(super) fn source(
             let mut stream = match watch(&lease_file) {
                 Ok(stream) => stream,
                 Err(e) => {
-                    log::error!("({}) {}", name, e);
+                    tracing::error!("({}) {}", name, e);
                     return;
                 }
             };
@@ -95,7 +95,7 @@ pub(super) fn source(
             while let Some(ev) = stream.next().await {
                 let records = match ev {
                     FileEvent::Delete => {
-                        log::warn!("({}) dhcp file {} is missing.", name, lease_file.display());
+                        tracing::warn!("({}) dhcp file {} is missing.", name, lease_file.display());
                         RecordSet::new()
                     }
                     _ => parse_file(&name, &dhcp_config, &lease_file).await,

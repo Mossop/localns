@@ -1,11 +1,12 @@
 use std::io;
 
-use flexi_logger::{style, DeferredNow, Logger, Record};
 use localns::{config_stream, create_api_server, create_server, RecordSources};
-use time::{format_description::FormatItem, macros::format_description};
 use tokio::{
     select,
     signal::unix::{signal, SignalKind},
+};
+use tracing_subscriber::{
+    layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer, Registry,
 };
 
 async fn run() -> Result<(), String> {
@@ -32,12 +33,12 @@ async fn run() -> Result<(), String> {
                     record_sources.replace_sources(&config).await;
                 },
                 Err(_) => {
-                    log::debug!("Config stream ended");
+                    tracing::debug!("Config stream ended");
                     break;
                 },
             },
             _ = sigterm.recv() => {
-                log::debug!("Saw SIGTERM");
+                tracing::debug!("Saw SIGTERM");
                 break;
             }
         }
@@ -48,34 +49,17 @@ async fn run() -> Result<(), String> {
     Ok(())
 }
 
-pub const TIME_FORMAT: &[FormatItem<'static>] =
-    format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
-
-pub fn log_format(
-    w: &mut dyn io::Write,
-    now: &mut DeferredNow,
-    record: &Record,
-) -> Result<(), io::Error> {
-    let level = record.level();
-    write!(
-        w,
-        "[{}] {} [{}] {}",
-        style(level).paint(now.format(TIME_FORMAT)),
-        style(level).paint(format!("{:5}", level.to_string())),
-        record.module_path().unwrap_or("<unnamed>"),
-        style(level).paint(record.args().to_string())
-    )
-}
-
 #[tokio::main]
 async fn main() {
-    if let Err(e) =
-        Logger::try_with_env_or_str("info").and_then(|logger| logger.format(log_format).start())
-    {
-        panic!("Failed to start logging: {}", e);
-    }
+    let formatter = tracing_subscriber::fmt::layer()
+        .with_ansi(true)
+        .pretty()
+        .with_writer(io::stderr)
+        .with_filter(EnvFilter::from_default_env());
+
+    Registry::default().with(formatter).init();
 
     if let Err(e) = run().await {
-        log::error!("{}", e);
+        tracing::error!("{}", e);
     }
 }

@@ -30,7 +30,7 @@ where
     T: DeserializeOwned,
 {
     let target = base_url.join(method).map_err(|e| {
-        log::error!("Unable to generate API URL: {}", e);
+        tracing::error!("Unable to generate API URL: {}", e);
         LoopResult::Quit
     })?;
 
@@ -38,12 +38,12 @@ where
         Ok(response) => match response.json::<T>().await {
             Ok(result) => Ok(result),
             Err(e) => {
-                log::error!("({}) Failed to parse response from server: {}", name, e);
+                tracing::error!("({}) Failed to parse response from server: {}", name, e);
                 Err(LoopResult::Backoff)
             }
         },
         Err(e) => {
-            log::error!("({}) Failed to connect to server: {}", name, e);
+            tracing::error!("({}) Failed to connect to server: {}", name, e);
             Err(LoopResult::Backoff)
         }
     }
@@ -55,7 +55,7 @@ async fn remote_loop(
     client: &Client,
     context: &mut SourceContext,
 ) -> LoopResult {
-    log::trace!(
+    tracing::trace!(
         "({}) Attempting to connect to remote server at {}...",
         name,
         remote_config.url
@@ -72,7 +72,7 @@ async fn remote_loop(
 
         if new_records != records {
             records = new_records;
-            log::trace!(
+            tracing::trace!(
                 "({}) Retrieved {} records from the remote server.",
                 name,
                 records.len()

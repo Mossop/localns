@@ -49,7 +49,7 @@ where
     T: DeserializeOwned,
 {
     let target = base_url.join(method).map_err(|e| {
-        log::error!("Unable to generate API URL: {}", e);
+        tracing::error!("Unable to generate API URL: {}", e);
         LoopResult::Quit
     })?;
 
@@ -57,12 +57,12 @@ where
         Ok(response) => match response.json::<T>().await {
             Ok(result) => Ok(result),
             Err(e) => {
-                log::error!("({}) Failed to parse response from traefik: {}", name, e);
+                tracing::error!("({}) Failed to parse response from traefik: {}", name, e);
                 Err(LoopResult::Backoff)
             }
         },
         Err(e) => {
-            log::error!("({}) Failed to connect to traefik: {}", name, e);
+            tracing::error!("({}) Failed to connect to traefik: {}", name, e);
             Err(LoopResult::Backoff)
         }
     }
@@ -164,7 +164,7 @@ fn generate_records(
         .filter_map(|r| match parse_hosts(&r.rule) {
             Ok(hosts) => Some(hosts),
             Err(e) => {
-                log::warn!("({}) Failed parsing rule for {}: {}", name, r.name, e);
+                tracing::warn!("({}) Failed parsing rule for {}: {}", name, r.name, e);
                 None
             }
         })
@@ -187,7 +187,7 @@ async fn traefik_loop(
     client: &Client,
     context: &mut SourceContext,
 ) -> LoopResult {
-    log::trace!(
+    tracing::trace!(
         "({}) Attempting to connect to traefik API at {}...",
         name,
         traefik_config.url
@@ -198,7 +198,7 @@ async fn traefik_loop(
         Err(result) => return result,
     };
 
-    log::debug!(
+    tracing::debug!(
         "({}) Connected to traefik version {}.",
         name,
         version.version

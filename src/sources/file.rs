@@ -19,7 +19,7 @@ pub type FileConfig = PathBuf;
 type LeaseFile = HashMap<Fqdn, RDataConfig>;
 
 fn parse_file(name: &str, lease_file: &Path) -> Result<RecordSet, String> {
-    log::trace!("({}) Parsing lease file {}...", name, lease_file.display());
+    tracing::trace!("({}) Parsing lease file {}...", name, lease_file.display());
 
     let f = File::open(lease_file)
         .map_err(|e| format!("Failed to open file at {}: {}", lease_file.display(), e))?;
@@ -51,12 +51,12 @@ pub(super) fn source(
                 match parse_file(&name, &lease_file) {
                     Ok(records) => records,
                     Err(e) => {
-                        log::error!("({}) {}", name, e);
+                        tracing::error!("({}) {}", name, e);
                         RecordSet::new()
                     }
                 }
             } else {
-                log::warn!("({}) file {} is missing.", name, lease_file.display());
+                tracing::warn!("({}) file {} is missing.", name, lease_file.display());
                 RecordSet::new()
             };
 
@@ -65,7 +65,7 @@ pub(super) fn source(
             let mut stream = match watch(&lease_file) {
                 Ok(stream) => stream,
                 Err(e) => {
-                    log::error!("({}) {}", name, e);
+                    tracing::error!("({}) {}", name, e);
                     return;
                 }
             };
@@ -73,13 +73,13 @@ pub(super) fn source(
             while let Some(ev) = stream.next().await {
                 let records = match ev {
                     FileEvent::Delete => {
-                        log::warn!("({}) dhcp file {} is missing.", name, lease_file.display());
+                        tracing::warn!("({}) dhcp file {} is missing.", name, lease_file.display());
                         RecordSet::new()
                     }
                     _ => match parse_file(&name, &lease_file) {
                         Ok(records) => records,
                         Err(e) => {
-                            log::error!("({}) {}", name, e);
+                            tracing::error!("({}) {}", name, e);
                             RecordSet::new()
                         }
                     },

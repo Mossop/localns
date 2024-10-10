@@ -30,18 +30,18 @@ async fn create_dns_server(config: &Config, server: Arc<Mutex<Server>>) -> Serve
     let handler = Handler { server };
 
     let port = config.server.port.unwrap_or(53);
-    log::trace!("Server listening on port {}", port);
+    tracing::trace!("Server listening on port {}", port);
 
     let mut server = ServerFuture::new(handler);
 
     match UdpSocket::bind(("0.0.0.0", port)).await {
         Ok(socket) => server.register_socket(socket),
-        Err(e) => log::error!("Unable to open UDP socket: {}", e),
+        Err(e) => tracing::error!("Unable to open UDP socket: {}", e),
     }
 
     match TcpListener::bind(("0.0.0.0", port)).await {
         Ok(socket) => server.register_listener(socket, Duration::from_millis(500)),
-        Err(e) => log::error!("Unable to open TCP socket: {}", e),
+        Err(e) => tracing::error!("Unable to open TCP socket: {}", e),
     }
 
     server
@@ -73,7 +73,7 @@ pub fn create_server(
 
                     if config.server != new_config.server {
                         if let Err(e) = dns_server.block_until_done().await {
-                            log::error!("Error waiting for DNS server to shutdown: {}", e);
+                            tracing::error!("Error waiting for DNS server to shutdown: {}", e);
                         }
 
                         dns_server = create_dns_server(&new_config, server.clone()).await;

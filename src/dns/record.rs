@@ -152,7 +152,7 @@ impl Fqdn {
                 Ok(name) => name.into(),
                 Err(e) => {
                     let full = format!("{}.{}", host.as_ref(), name);
-                    log::warn!("Name {} is an invalid domain name: {}", full, e);
+                    tracing::warn!("Name {} is an invalid domain name: {}", full, e);
                     Fqdn::Invalid(full)
                 }
             },
@@ -230,7 +230,7 @@ impl From<String> for Fqdn {
                 name.into()
             }
             Err(e) => {
-                log::warn!("Name {} is an invalid domain name: {}", str, e);
+                tracing::warn!("Name {} is an invalid domain name: {}", str, e);
                 Fqdn::Invalid(str)
             }
         }
@@ -245,7 +245,7 @@ impl From<&String> for Fqdn {
                 Fqdn::Valid(name)
             }
             Err(e) => {
-                log::warn!("Name {} is an invalid domain name: {}", str, e);
+                tracing::warn!("Name {} is an invalid domain name: {}", str, e);
                 Fqdn::Invalid(str.clone())
             }
         }
@@ -260,7 +260,7 @@ impl From<&str> for Fqdn {
                 Fqdn::Valid(name)
             }
             Err(e) => {
-                log::warn!("Name {} is an invalid domain name: {}", str, e);
+                tracing::warn!("Name {} is an invalid domain name: {}", str, e);
                 Fqdn::Invalid(str.into())
             }
         }

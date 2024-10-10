@@ -7,11 +7,11 @@ use hickory_client::{
     rr::{DNSClass, Name, RecordType},
     udp::UdpClientStream,
 };
-use log::Level;
 use serde::Deserialize;
 use tokio::net::UdpSocket;
+use tracing::Level;
 
-use crate::util::Address;
+use crate::{event_lvl, util::Address};
 
 pub type UpstreamConfig = Address;
 
@@ -64,7 +64,7 @@ impl Upstream {
         let address = match self.config.to_socket_address(53) {
             Ok(addr) => addr,
             Err(e) => {
-                log::error!("Unable to lookup nameserver: {}", e);
+                tracing::error!("Unable to lookup nameserver: {}", e);
                 return None;
             }
         };
@@ -72,7 +72,7 @@ impl Upstream {
         let mut client = match connect_client(address).await {
             Ok(c) => c,
             Err(e) => {
-                log::error!("{}", e);
+                tracing::error!("{}", e);
                 return None;
             }
         };
@@ -80,29 +80,31 @@ impl Upstream {
         match client.query(name.clone(), query_class, query_type).await {
             Ok(response) => {
                 let level = match response.response_code() {
-                    ResponseCode::NoError | ResponseCode::NXDomain => Level::Trace,
-                    _ => Level::Warn,
+                    ResponseCode::NoError | ResponseCode::NXDomain => Level::TRACE,
+                    _ => Level::WARN,
                 };
 
                 let duration = Instant::now() - start;
-                log::log!(level, "({id}) Upstream UDP://{addr} {query}:{qtype}:{class} response:{code:?} rr:{answers}/{authorities}/{additionals} rflags:{rflags} ms:{duration}",
+                event_lvl!(
+                    level,
                     id = id,
-                    addr = address,
-                    query = name,
-                    qtype = query_type,
-                    class = query_class,
-                    code = response.response_code(),
+                    upstream = address.to_string(),
+                    query = name.to_string(),
+                    qtype = query_type.to_string(),
+                    class = query_class.to_string(),
+                    response_code = response.response_code().to_string(),
                     answers = response.answer_count(),
                     authorities = response.name_server_count(),
                     additionals = response.additional_count(),
-                    rflags = response.flags(),
-                    duration = duration.as_millis(),
+                    rflags = response.flags().to_string(),
+                    duration_ms = duration.as_millis(),
+                    "Upstream request"
                 );
 
                 Some(response)
             }
             Err(e) => {
-                log::warn!("Upstream DNS server returned error: {}", e);
+                tracing::warn!("Upstream DNS server returned error: {}", e);
                 None
             }
         }

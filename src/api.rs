@@ -32,7 +32,7 @@ async fn requests(data: web::Data<AppData>) -> impl Responder {
 
 fn create_server(config: Config, state: AppData) -> Option<Server> {
     let config = config.api?;
-    log::trace!("Starting API server at {}", config.address);
+    tracing::trace!("Starting API server at {}", config.address);
 
     let server = match HttpServer::new(move || {
         App::new()
@@ -44,7 +44,7 @@ fn create_server(config: Config, state: AppData) -> Option<Server> {
     {
         Ok(server) => server,
         Err(e) => {
-            log::error!("Failed to create API server: {}", e);
+            tracing::error!("Failed to create API server: {}", e);
             return None;
         }
     };

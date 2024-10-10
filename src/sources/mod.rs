@@ -70,7 +70,7 @@ impl RecordSourcesState {
             .collect();
 
         if let Err(e) = self.sender.send(all_records) {
-            log::trace!("Failed to send new records: {}", e);
+            tracing::trace!("Failed to send new records: {}", e);
         }
     }
 
@@ -148,7 +148,7 @@ impl RecordSources {
 
         // DHCP is assumed to not need any additional resolution.
         for (name, dhcp_config) in &config.sources.dhcp {
-            log::trace!("Adding dhcp source {}", name);
+            tracing::trace!("Adding dhcp source {}", name);
             let (context, pending) = self.add_source().await;
             dhcp::source(name.clone(), config.clone(), dhcp_config.clone(), context);
             assert!(pending.await.is_err());
@@ -156,7 +156,7 @@ impl RecordSources {
 
         // File sources are assumed to not need any additional resolution.
         for (name, file_config) in &config.sources.file {
-            log::trace!("Adding file source {}", name);
+            tracing::trace!("Adding file source {}", name);
             let (context, pending) = self.add_source().await;
             file::source(name.clone(), config.clone(), file_config.clone(), context);
             assert!(pending.await.is_err());
@@ -164,7 +164,7 @@ impl RecordSources {
 
         // Docker hostname may depend on DHCP records above.
         for (name, docker_config) in &config.sources.docker {
-            log::trace!("Adding docker source {}", name);
+            tracing::trace!("Adding docker source {}", name);
             let (context, pending) = self.add_source().await;
             docker::source(name.clone(), config.clone(), docker_config.clone(), context);
             assert!(pending.await.is_err());
@@ -172,7 +172,7 @@ impl RecordSources {
 
         // Traefik hostname may depend on Docker or DHCP records.
         for (name, traefik_config) in &config.sources.traefik {
-            log::trace!("Adding traefik source {}", name);
+            tracing::trace!("Adding traefik source {}", name);
             let (context, pending) = self.add_source().await;
             traefik::source(name.clone(), traefik_config.clone(), context);
             assert!(pending.await.is_err());
@@ -180,7 +180,7 @@ impl RecordSources {
 
         // Remote hostname my depend on anything.
         for (name, remote_config) in &config.sources.remote {
-            log::trace!("Adding remote source {}", name);
+            tracing::trace!("Adding remote source {}", name);
             let (context, pending) = self.add_source().await;
             remote::source(name.clone(), remote_config.clone(), context);
             assert!(pending.await.is_err());

@@ -1,15 +1,15 @@
 use std::{fmt, net::SocketAddr, time::Instant};
 
-use log::Level;
-use serde::Deserialize;
-use tokio::net::UdpSocket;
-use trust_dns_server::client::{
+use hickory_client::{
     client::AsyncClient,
     client::ClientHandle,
     op::{DnsResponse, ResponseCode},
     rr::{DNSClass, Name, RecordType},
     udp::UdpClientStream,
 };
+use log::Level;
+use serde::Deserialize;
+use tokio::net::UdpSocket;
 
 use crate::util::Address;
 

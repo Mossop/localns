@@ -1,4 +1,5 @@
 use futures::StreamExt;
+use hickory_server::{proto::rr, proto::rr::rdata::SOA};
 use std::{
     collections::HashMap,
     env, fmt,
@@ -6,7 +7,6 @@ use std::{
     path::{Path, PathBuf},
 };
 use tokio::sync::watch;
-use trust_dns_server::{client::rr::rdata::SOA, proto::rr};
 
 use crate::{
     api::ApiConfig, dns::Fqdn, dns::ServerConfig, dns::Upstream, sources::SourceConfig,

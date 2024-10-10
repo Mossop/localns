@@ -1,13 +1,13 @@
 use std::{collections::HashSet, time::Instant};
 
-use log::Level;
-use trust_dns_server::{
-    client::{
+use hickory_server::{
+    proto::{
         op::{Header, Query, ResponseCode},
         rr::{self, Name},
     },
     server::Request,
 };
+use log::Level;
 
 use crate::config::Config;
 
@@ -75,8 +75,8 @@ impl<'a> QueryContext<'a> {
         if self.request.recursion_desired() {
             if let Some(rr::RData::CNAME(ref name)) = record.data() {
                 if !self.seen.contains(name) {
-                    self.seen.insert(name.clone());
-                    self.unknowns.insert(name.clone());
+                    self.seen.insert(name.0.clone());
+                    self.unknowns.insert(name.0.clone());
                 }
             }
         }
@@ -145,12 +145,14 @@ impl<'a> QueryContext<'a> {
 
                 self.add_answers(records);
             } else if let Some(upstream) = &config.upstream {
-                if let Some(mut response) = upstream
+                if let Some(response) = upstream
                     .lookup(self.request.id(), &name, query_class, query_type)
                     .await
                 {
+                    let mut message = response.into_message();
+
                     if is_first {
-                        match response.response_code() {
+                        match message.response_code() {
                             ResponseCode::NXDomain => {
                                 if server.records.has_name(&name) {
                                     self.response_code = ResponseCode::NoError;
@@ -161,15 +163,15 @@ impl<'a> QueryContext<'a> {
                             code => self.response_code = code,
                         }
 
-                        self.recursion_available = response.recursion_available();
+                        self.recursion_available = message.recursion_available();
 
-                        self.add_answers(response.take_answers());
-                        self.add_additionals(response.take_additionals());
+                        self.add_answers(message.take_answers());
+                        self.add_additionals(message.take_additionals());
 
                         let mut name_servers: Vec<rr::Record> = Vec::new();
                         let mut soa: Option<rr::Record> = None;
 
-                        for record in response.take_name_servers() {
+                        for record in message.take_name_servers() {
                             if record.record_type() == rr::RecordType::SOA {
                                 soa.replace(record);
                             } else {
@@ -180,8 +182,8 @@ impl<'a> QueryContext<'a> {
                         self.add_name_servers(name_servers);
                         self.soa = config.soa().or(soa);
                     } else {
-                        self.add_additionals(response.take_answers());
-                        self.add_additionals(response.take_additionals());
+                        self.add_additionals(message.take_answers());
+                        self.add_additionals(message.take_additionals());
                     }
                 }
             }

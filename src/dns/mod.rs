@@ -1,12 +1,12 @@
 use std::{sync::Arc, time::Duration};
 
+use hickory_server::ServerFuture;
 use serde::Deserialize;
 use tokio::{
     net::{TcpListener, UdpSocket},
     select,
     sync::{watch, Mutex},
 };
-use trust_dns_server::ServerFuture;
 
 mod handler;
 mod record;

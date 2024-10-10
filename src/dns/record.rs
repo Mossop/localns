@@ -10,11 +10,8 @@ use std::{
     str::FromStr,
 };
 
+use hickory_server::proto::rr::{self, rdata, DNSClass, Name, RecordType};
 use serde::{Deserialize, Serialize};
-use trust_dns_server::{
-    client::rr::{DNSClass, LowerName, Name, RecordType},
-    proto::rr,
-};
 
 use crate::{config::ZoneConfig, util::upsert};
 
@@ -49,14 +46,14 @@ impl TryInto<rr::RData> for RData {
 
     fn try_into(self) -> Result<rr::RData, Self::Error> {
         match self {
-            RData::A(ip) => Ok(rr::RData::A(ip)),
-            RData::Aaaa(ip) => Ok(rr::RData::AAAA(ip)),
+            RData::A(ip) => Ok(rr::RData::A(ip.into())),
+            RData::Aaaa(ip) => Ok(rr::RData::AAAA(ip.into())),
             RData::Cname(name) => match name {
-                Fqdn::Valid(name) => Ok(rr::RData::CNAME(name)),
+                Fqdn::Valid(name) => Ok(rr::RData::CNAME(rdata::CNAME(name))),
                 Fqdn::Invalid(str) => Err(format!("Invalid name: {}", str)),
             },
             RData::Ptr(name) => match name {
-                Fqdn::Valid(name) => Ok(rr::RData::PTR(name)),
+                Fqdn::Valid(name) => Ok(rr::RData::PTR(rdata::PTR(name))),
                 Fqdn::Invalid(str) => Err(format!("Invalid name: {}", str)),
             },
         }
@@ -215,13 +212,6 @@ impl Display for Fqdn {
 impl From<Fqdn> for String {
     fn from(fqdn: Fqdn) -> String {
         fqdn.to_string()
-    }
-}
-
-impl From<&LowerName> for Fqdn {
-    fn from(name: &LowerName) -> Self {
-        assert!(name.is_fqdn());
-        Fqdn::Valid(Name::from(name))
     }
 }
 

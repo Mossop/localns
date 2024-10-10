@@ -11,18 +11,19 @@ edition = "2021"
 default-run = "localns"
 
 [dependencies]
-bollard = { version = "^0.14.0", features = ["ssl"] }
+bollard = { version = "^0.17.1", features = ["ssl"] }
 log = "^0.4.17"
 flexi_logger = { version = "^0.23.3", features = ["colors"] }
 tokio = { version = "1.20.4", features = ["full"] }
 serde = "^1.0.171"
-serde_yaml = "^0.8.26"
-futures = "^0.3.28"
-pin-project-lite = "^0.2.8"
-reqwest = { version = "^0.11.16", default-features = false, features = ["json", "rustls-tls"] }
-notify = "^4.0.17"
-trust-dns-server = "^0.22.0"
-async-trait = "^0.1.68"
+serde_yaml = "^0.9.34"
+futures = "^0.3.31"
+reqwest = { version = "^0.12.8", default-features = false, features = ["json", "rustls-tls"] }
+notify = "^6.1.1"
+hickory-server = "^0.24.1"
+hickory-client = "^0.24.1"
+async-trait = "^0.1.83"
 uuid = { version = "^1.4.0", features = ["v4"] }
 time = "^0.3.20"
 actix-web = "^4.3.1"
+debounced = "^0.2.0"

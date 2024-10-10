@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
-use trust_dns_server::{
+use hickory_client::op::{Edns, Header, MessageType, OpCode, ResponseCode};
+use hickory_server::{
     authority::MessageResponseBuilder,
-    client::op::{Edns, Header, MessageType, OpCode, ResponseCode},
     server::{Request, RequestHandler, ResponseHandler, ResponseInfo},
 };
+use tokio::sync::Mutex;
 
 use super::server::{QueryContext, Server};
 

@@ -1,16 +1,14 @@
 use std::{
-    path::Path,
+    fs,
+    path::{Path, PathBuf},
     pin::Pin,
-    sync::mpsc as std_mpsc,
     task::{Context, Poll},
-    thread,
     time::Duration,
 };
 
 use futures::Stream;
-use notify::{watcher, DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
-use pin_project_lite::pin_project;
-use tokio::sync::mpsc as tokio_mpsc;
+use notify::{Config, Event, EventHandler, PollWatcher, RecursiveMode, Watcher};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 pub enum FileEvent {
     Create,
@@ -18,29 +16,59 @@ pub enum FileEvent {
     Change,
 }
 
-pin_project! {
-    pub struct FileEventStream {
-        watcher: RecommendedWatcher,
-        #[pin]
-        receiver: tokio_mpsc::Receiver<FileEvent>,
-    }
+pub struct FileEventStream {
+    _watcher: PollWatcher,
+    receiver: Receiver<FileEvent>,
 }
 
 impl Stream for FileEventStream {
     type Item = FileEvent;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.project();
-        this.receiver.poll_recv(cx)
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.receiver.poll_recv(cx)
+    }
+}
+
+struct FileWatchState {
+    path: PathBuf,
+    exists: bool,
+    sender: Sender<FileEvent>,
+}
+
+impl FileWatchState {
+    fn new(path: &Path, sender: Sender<FileEvent>) -> Self {
+        Self {
+            path: path.to_owned(),
+            exists: fs::exists(path).unwrap_or_default(),
+            sender,
+        }
+    }
+}
+
+impl EventHandler for FileWatchState {
+    fn handle_event(&mut self, _: Result<Event, notify::Error>) {
+        let now_exists = fs::exists(&self.path).unwrap_or_default();
+
+        let event = match (now_exists, self.exists) {
+            (true, false) => FileEvent::Create,
+            (false, true) => FileEvent::Delete,
+            (true, _) => FileEvent::Change,
+            _ => return,
+        };
+
+        let _ = self.sender.blocking_send(event);
     }
 }
 
 pub fn watch(path: &Path) -> Result<FileEventStream, String> {
-    let (std_sender, std_receiver) = std_mpsc::channel();
-    let (tk_sender, tk_receiver) = tokio_mpsc::channel(10);
+    let (sender, receiver) = channel(10);
 
-    let mut watcher = watcher(std_sender, Duration::from_millis(500))
-        .map_err(|e| format!("Unable to watch file {}: {}", path.display(), e))?;
+    let watch_state = FileWatchState::new(path, sender);
+    let mut watcher = PollWatcher::new(
+        watch_state,
+        Config::default().with_poll_interval(Duration::from_millis(500)),
+    )
+    .map_err(|e| format!("Unable to watch file {}: {}", path.display(), e))?;
 
     let watch_path = match path.parent() {
         Some(parent) => parent,
@@ -51,67 +79,8 @@ pub fn watch(path: &Path) -> Result<FileEventStream, String> {
         .watch(watch_path, RecursiveMode::Recursive)
         .map_err(|e| format!("Unable to watch file {}: {}", path.display(), e))?;
 
-    let target = path.to_owned();
-    thread::spawn(move || loop {
-        for ev in std_receiver.iter() {
-            let event = match ev {
-                DebouncedEvent::NoticeWrite(ev_path) => {
-                    if target == ev_path {
-                        FileEvent::Change
-                    } else {
-                        continue;
-                    }
-                }
-                DebouncedEvent::NoticeRemove(ev_path) => {
-                    if target == ev_path {
-                        FileEvent::Delete
-                    } else {
-                        continue;
-                    }
-                }
-                DebouncedEvent::Create(ev_path) => {
-                    if target == ev_path {
-                        FileEvent::Create
-                    } else {
-                        continue;
-                    }
-                }
-                DebouncedEvent::Write(ev_path) => {
-                    if target == ev_path {
-                        FileEvent::Change
-                    } else {
-                        continue;
-                    }
-                }
-                DebouncedEvent::Remove(ev_path) => {
-                    if target == ev_path {
-                        FileEvent::Delete
-                    } else {
-                        continue;
-                    }
-                }
-                DebouncedEvent::Rename(path1, path2) => {
-                    if target == path1 {
-                        FileEvent::Delete
-                    } else if target == path2 {
-                        FileEvent::Create
-                    } else {
-                        continue;
-                    }
-                }
-                _ => {
-                    continue;
-                }
-            };
-
-            if tk_sender.blocking_send(event).is_err() {
-                return;
-            }
-        }
-    });
-
     Ok(FileEventStream {
-        watcher,
-        receiver: tk_receiver,
+        _watcher: watcher,
+        receiver,
     })
 }

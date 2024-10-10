@@ -1,5 +1,6 @@
 use std::io;
 
+use clap::Parser;
 use localns::{config_stream, create_api_server, create_server, RecordSources};
 use tokio::{
     select,
@@ -9,10 +10,16 @@ use tracing_subscriber::{
     layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer, Registry,
 };
 
-async fn run() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().collect();
+#[derive(Parser)]
+#[clap(author, version)]
+struct CliArgs {
+    config: Option<String>,
+}
 
-    let mut config_stream = config_stream(&args);
+async fn run() -> Result<(), String> {
+    let args = CliArgs::parse();
+
+    let mut config_stream = config_stream(args.config.as_deref());
     let mut record_sources = RecordSources::new();
 
     create_server(config_stream.clone(), record_sources.receiver());

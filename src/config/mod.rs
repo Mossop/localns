@@ -1,9 +1,13 @@
+use figment::{
+    providers::{Env, Format, Yaml},
+    value::{Uncased, UncasedStr},
+    Figment,
+};
 use futures::StreamExt;
 use hickory_server::{proto::rr, proto::rr::rdata::SOA};
 use std::{
     collections::HashMap,
     env, fmt,
-    fs::File,
     path::{Path, PathBuf},
 };
 use tokio::sync::watch;
@@ -114,6 +118,23 @@ impl Zones {
     }
 }
 
+fn map_env(key: &UncasedStr) -> Uncased<'_> {
+    key.as_str()
+        .split('_')
+        .enumerate()
+        .fold(String::new(), |mut key, (idx, part)| {
+            if idx == 0 {
+                key.push_str(&part.to_lowercase());
+            } else {
+                key.push_str(&part[0..1].to_uppercase());
+                key.push_str(&part[1..].to_lowercase());
+            }
+
+            key
+        })
+        .into()
+}
+
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct Config {
     pub config_file: PathBuf,
@@ -125,11 +146,11 @@ pub struct Config {
 
 impl Config {
     pub fn from_file(config_file: &Path) -> Result<Config, String> {
-        let f = File::open(config_file)
-            .map_err(|e| format!("Failed to open file at {}: {}", config_file.display(), e))?;
-
-        let config: file::ConfigFile = serde_yaml::from_reader(f)
-            .map_err(|e| format!("Failed to parse configuration: {}", e))?;
+        let config: file::ConfigFile = Figment::new()
+            .join(Env::prefixed("LOCALNS_").map(map_env).lowercase(false))
+            .join(Yaml::file_exact(config_file))
+            .extract()
+            .map_err(|e| format!("Failed parsing config: {e}"))?;
 
         Ok(Config {
             config_file: config_file.to_owned(),
@@ -156,8 +177,8 @@ impl Config {
     }
 }
 
-pub fn config_stream(args: &[String]) -> watch::Receiver<Config> {
-    let config_file = config_file(args.get(1));
+pub fn config_stream(args: Option<&str>) -> watch::Receiver<Config> {
+    let config_file = config_file(args);
     tracing::info!("Reading configuration from {}.", config_file.display());
     let mut file_stream = watch(&config_file).unwrap();
 
@@ -205,7 +226,7 @@ pub fn config_stream(args: &[String]) -> watch::Receiver<Config> {
     receiver
 }
 
-fn config_file(arg: Option<&String>) -> PathBuf {
+fn config_file(arg: Option<&str>) -> PathBuf {
     if let Some(str) = arg {
         PathBuf::from(str).canonicalize().unwrap()
     } else if let Ok(value) = env::var("LOCALNS_CONFIG") {

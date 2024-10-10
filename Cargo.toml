@@ -26,3 +26,5 @@ actix-web = "^4.3.1"
 debounced = "^0.2.0"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+clap = { version = "4.5.20", features = ["derive"] }
+figment = { version = "0.10.19", features = ["yaml", "env"] }

@@ -9,9 +9,9 @@ use hickory_server::{
 };
 use tracing::Level;
 
-use crate::{config::Config, event_lvl};
+use crate::{dns::ServerState, event_lvl};
 
-use super::{Fqdn, RecordSet};
+use super::Fqdn;
 
 pub(super) struct QueryContext<'a> {
     request: &'a Request,
@@ -29,7 +29,7 @@ pub(super) struct QueryContext<'a> {
 }
 
 impl<'a> QueryContext<'a> {
-    pub fn new(request: &'a Request) -> Self {
+    pub(crate) fn new(request: &'a Request) -> Self {
         let mut context = Self {
             request,
 
@@ -55,19 +55,19 @@ impl<'a> QueryContext<'a> {
         self.request.request_info().query.original()
     }
 
-    pub fn answers(&self) -> impl Iterator<Item = &rr::Record> {
+    pub(crate) fn answers(&self) -> impl Iterator<Item = &rr::Record> {
         self.answers.iter()
     }
 
-    pub fn additionals(&self) -> impl Iterator<Item = &rr::Record> {
+    pub(crate) fn additionals(&self) -> impl Iterator<Item = &rr::Record> {
         self.additionals.iter()
     }
 
-    pub fn name_servers(&self) -> impl Iterator<Item = &rr::Record> {
+    pub(crate) fn name_servers(&self) -> impl Iterator<Item = &rr::Record> {
         self.name_servers.iter()
     }
 
-    pub fn soa(&self) -> impl Iterator<Item = &rr::Record> {
+    pub(crate) fn soa(&self) -> impl Iterator<Item = &rr::Record> {
         self.soa.iter()
     }
 
@@ -82,7 +82,7 @@ impl<'a> QueryContext<'a> {
         }
     }
 
-    pub fn add_answers(&mut self, records: Vec<rr::Record>) {
+    pub(crate) fn add_answers(&mut self, records: Vec<rr::Record>) {
         if !records.is_empty() && self.response_code == ResponseCode::NXDomain {
             self.response_code = ResponseCode::NoError;
         }
@@ -96,21 +96,21 @@ impl<'a> QueryContext<'a> {
         self.answers.extend(records);
     }
 
-    pub fn add_additionals(&mut self, records: Vec<rr::Record>) {
+    pub(crate) fn add_additionals(&mut self, records: Vec<rr::Record>) {
         self.additionals.extend(records);
     }
 
-    pub fn add_name_servers(&mut self, records: Vec<rr::Record>) {
+    pub(crate) fn add_name_servers(&mut self, records: Vec<rr::Record>) {
         self.name_servers.extend(records);
     }
 
-    pub fn next_unknown(&mut self) -> Option<Name> {
+    pub(crate) fn next_unknown(&mut self) -> Option<Name> {
         let next = self.unknowns.iter().next()?.clone();
         self.unknowns.remove(&next);
         Some(next)
     }
 
-    pub fn header(&self, request_header: &Header) -> Header {
+    pub(crate) fn header(&self, request_header: &Header) -> Header {
         let mut response_header = Header::response_from_request(request_header);
         response_header.set_authoritative(self.soa.is_some());
         response_header.set_recursion_available(self.recursion_available);
@@ -118,7 +118,7 @@ impl<'a> QueryContext<'a> {
         response_header
     }
 
-    pub async fn perform_query(&mut self, server: &Server) {
+    pub(crate) async fn perform_query(&mut self, server: &ServerState) {
         let start = Instant::now();
 
         let mut is_first = true;
@@ -129,7 +129,7 @@ impl<'a> QueryContext<'a> {
         while let Some(name) = self.next_unknown() {
             let fqdn = Fqdn::from(name.clone());
             let config = server.config.zone_config(&fqdn);
-            tracing::trace!("Searching for {} with config {:?}", name, config);
+            tracing::trace!(name = %name, config = ?config, "Looking up name");
 
             let records: Vec<rr::Record> = server
                 .records
@@ -226,25 +226,5 @@ impl<'a> QueryContext<'a> {
             duration_ms = duration.as_millis(),
             "DNS Query"
         );
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct Server {
-    records: RecordSet,
-    config: Config,
-}
-
-impl Server {
-    pub fn new(config: Config, records: RecordSet) -> Self {
-        Self { config, records }
-    }
-
-    pub fn update_config(&mut self, config: Config) {
-        self.config = config;
-    }
-
-    pub fn update_records(&mut self, records: RecordSet) {
-        self.records = records;
     }
 }

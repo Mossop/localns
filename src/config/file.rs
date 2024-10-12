@@ -6,7 +6,11 @@ use serde::{
     Deserialize, Deserializer,
 };
 
-use crate::{api::ApiConfig, dns::Fqdn, dns::ServerConfig, dns::Upstream, sources::SourceConfig};
+use crate::{
+    api::ApiConfig,
+    dns::{Fqdn, ServerConfig, Upstream},
+    sources::SourceConfig,
+};
 
 struct UrlVisitor;
 
@@ -25,7 +29,7 @@ impl<'de> Visitor<'de> for UrlVisitor {
     }
 }
 
-pub fn deserialize_url<'de, D>(de: D) -> Result<Url, D::Error>
+pub(crate) fn deserialize_url<'de, D>(de: D) -> Result<Url, D::Error>
 where
     D: Deserializer<'de>,
 {

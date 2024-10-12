@@ -1,13 +1,10 @@
-use std::io;
+use std::{env, io, path::PathBuf, sync::Arc};
 
 use clap::Parser;
-use localns::{config_stream, create_api_server, create_server, RecordSources};
-use tokio::{
-    select,
-    signal::unix::{signal, SignalKind},
-};
+use localns::{Error, Server};
+use tokio::sync::Notify;
 use tracing_subscriber::{
-    layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer, Registry,
+    filter::Builder, layer::SubscriberExt, util::SubscriberInitExt, Layer, Registry,
 };
 
 #[derive(Parser)]
@@ -16,57 +13,55 @@ struct CliArgs {
     config: Option<String>,
 }
 
-async fn run() -> Result<(), String> {
-    let args = CliArgs::parse();
-
-    let mut config_stream = config_stream(args.config.as_deref());
-    let mut record_sources = RecordSources::new();
-
-    create_server(config_stream.clone(), record_sources.receiver());
-    create_api_server(config_stream.clone(), record_sources.receiver());
-
-    record_sources
-        .replace_sources(&config_stream.borrow_and_update())
-        .await;
-
-    let mut sigterm = signal(SignalKind::terminate())
-        .map_err(|e| format!("Failed to register signal handler: {}", e))?;
-
-    loop {
-        select! {
-            result = config_stream.changed() => match result {
-                Ok(_) => {
-                    let config = config_stream.borrow().clone();
-                    record_sources.replace_sources(&config).await;
-                },
-                Err(_) => {
-                    tracing::debug!("Config stream ended");
-                    break;
-                },
-            },
-            _ = sigterm.recv() => {
-                tracing::debug!("Saw SIGTERM");
-                break;
-            }
-        }
+fn config_file(arg: Option<&str>) -> PathBuf {
+    if let Some(str) = arg {
+        PathBuf::from(str).canonicalize().unwrap()
+    } else if let Ok(value) = env::var("LOCALNS_CONFIG") {
+        PathBuf::from(value).canonicalize().unwrap()
+    } else {
+        PathBuf::from("config.yaml").canonicalize().unwrap()
     }
+}
 
-    record_sources.destroy().await;
+async fn wait_for_termination() {
+    let notify = Arc::new(Notify::new());
+
+    let notifier = notify.clone();
+    ctrlc::set_handler(move || {
+        notifier.notify_one();
+    })
+    .unwrap();
+
+    notify.notified().await;
+}
+
+async fn run() -> Result<(), Error> {
+    let args = CliArgs::parse();
+    let config_path = config_file(args.config.as_deref());
+    let server = Server::new(&config_path).await?;
+
+    wait_for_termination().await;
+
+    server.shutdown().await;
 
     Ok(())
 }
 
 #[tokio::main]
 async fn main() {
+    let env_filter = Builder::default()
+        .with_default_directive("localns=trace".parse().unwrap())
+        .from_env_lossy();
+
     let formatter = tracing_subscriber::fmt::layer()
         .with_ansi(true)
         .pretty()
         .with_writer(io::stderr)
-        .with_filter(EnvFilter::from_default_env());
+        .with_filter(env_filter);
 
     Registry::default().with(formatter).init();
 
     if let Err(e) = run().await {
-        tracing::error!("{}", e);
+        tracing::error!(error = %e, "Unexpected error");
     }
 }

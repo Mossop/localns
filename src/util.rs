@@ -1,6 +1,5 @@
 use serde::Deserialize;
 use std::{
-    collections::HashMap,
     fmt::{self, Display},
     hash::Hash,
     net::{AddrParseError, IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -155,18 +154,6 @@ impl From<Host> for Address {
     fn from(host: Host) -> Self {
         Self { host, port: None }
     }
-}
-
-pub fn upsert<'a, K, V>(map: &'a mut HashMap<K, V>, key: &K) -> &'a mut V
-where
-    K: Clone + Eq + Hash,
-    V: Default,
-{
-    if !map.contains_key(key) {
-        map.insert(key.clone(), Default::default());
-    }
-
-    map.get_mut(key).unwrap()
 }
 
 #[macro_export]

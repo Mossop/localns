@@ -5,9 +5,11 @@ use hickory_server::{
     authority::MessageResponseBuilder,
     server::{Request, RequestHandler, ResponseHandler, ResponseInfo},
 };
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
-use super::server::{QueryContext, Server};
+use crate::dns::ServerState;
+
+use super::server::QueryContext;
 
 fn serve_failed() -> ResponseInfo {
     let mut header = Header::new();
@@ -15,13 +17,14 @@ fn serve_failed() -> ResponseInfo {
     header.into()
 }
 
-pub(super) struct Handler {
-    pub server: Arc<Mutex<Server>>,
+#[derive(Clone)]
+pub(crate) struct Handler {
+    pub server_state: Arc<RwLock<ServerState>>,
 }
 
 impl Handler {
-    async fn server(&self) -> Server {
-        let server = self.server.lock().await;
+    async fn server_state(&self) -> ServerState {
+        let server = self.server_state.read().await;
         server.clone()
     }
 }
@@ -49,9 +52,9 @@ impl RequestHandler for Handler {
 
             if req_edns.version() > our_version {
                 tracing::warn!(
-                    "Request edns version greater than {}: {}",
-                    our_version,
-                    req_edns.version()
+                    request_version = req_edns.version(),
+                    current_version = our_version,
+                    "Invalid request edns version",
                 );
 
                 // TODO: should ResponseHandle consume self?
@@ -62,7 +65,7 @@ impl RequestHandler for Handler {
                 // couldn't handle the request
                 return match result {
                     Err(e) => {
-                        tracing::error!("request error: {}", e);
+                        tracing::error!(error = %e, "Request error");
                         serve_failed()
                     }
                     Ok(info) => info,
@@ -73,7 +76,7 @@ impl RequestHandler for Handler {
         let result = match request.message_type() {
             MessageType::Query => match request.op_code() {
                 OpCode::Query => {
-                    let server = self.server().await;
+                    let server = self.server_state().await;
                     let mut context = QueryContext::new(request);
                     context.perform_query(&server).await;
 
@@ -88,14 +91,14 @@ impl RequestHandler for Handler {
                         .await
                 }
                 c => {
-                    tracing::warn!("Unimplemented op_code: {:?}", c);
+                    tracing::warn!(op_code = ?c, "Unimplemented op_code");
                     response_handle
                         .send_response(builder.error_msg(request.header(), ResponseCode::NotImp))
                         .await
                 }
             },
             MessageType::Response => {
-                tracing::warn!("got a response as a request from id: {}", request.id());
+                tracing::warn!(id = request.id(), "Got a response as a request from id");
                 response_handle
                     .send_response(builder.error_msg(request.header(), ResponseCode::FormErr))
                     .await
@@ -104,7 +107,7 @@ impl RequestHandler for Handler {
 
         match result {
             Err(e) => {
-                tracing::error!("Request failed: {}", e);
+                tracing::error!(error = %e, "Request failed");
                 serve_failed()
             }
             Ok(info) => info,

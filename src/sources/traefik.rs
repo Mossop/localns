@@ -1,20 +1,20 @@
 use std::time::Duration;
 
-use futures::future::Abortable;
 use reqwest::{Client, Url};
 use serde::{de::DeserializeOwned, Deserialize};
 use tokio::time::sleep;
+use tracing::instrument;
 
 use crate::{
     backoff::Backoff,
     config::deserialize_url,
     dns::{Fqdn, RData, RDataConfig, Record, RecordSet},
+    sources::{SourceHandle, SpawnHandle},
+    Error, Server, SourceRecords, UniqueId,
 };
 
-use super::SourceContext;
-
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
-pub struct TraefikConfig {
+pub(crate) struct TraefikConfig {
     #[serde(deserialize_with = "deserialize_url")]
     url: Url,
     address: Option<RDataConfig>,
@@ -39,6 +39,7 @@ enum LoopResult {
     Quit,
 }
 
+#[instrument(fields(source = "traefik"), skip(client))]
 async fn api_call<T>(
     name: &str,
     client: &Client,
@@ -49,7 +50,7 @@ where
     T: DeserializeOwned,
 {
     let target = base_url.join(method).map_err(|e| {
-        tracing::error!("Unable to generate API URL: {}", e);
+        tracing::error!(error = %e, "Unable to generate API URL");
         LoopResult::Quit
     })?;
 
@@ -57,18 +58,18 @@ where
         Ok(response) => match response.json::<T>().await {
             Ok(result) => Ok(result),
             Err(e) => {
-                tracing::error!("({}) Failed to parse response from traefik: {}", name, e);
+                tracing::error!(error = %e, "Failed to parse response from traefik");
                 Err(LoopResult::Backoff)
             }
         },
         Err(e) => {
-            tracing::error!("({}) Failed to connect to traefik: {}", name, e);
+            tracing::error!(error = %e, "Failed to connect to traefik");
             Err(LoopResult::Backoff)
         }
     }
 }
 
-fn parse_hosts(rule: &str) -> Result<Vec<Fqdn>, String> {
+fn parse_hosts(rule: &str) -> Result<Vec<Fqdn>, Error> {
     let mut hosts: Vec<Fqdn> = Vec::new();
 
     for item in rule.split("||") {
@@ -78,7 +79,7 @@ fn parse_hosts(rule: &str) -> Result<Vec<Fqdn>, String> {
     Ok(hosts)
 }
 
-fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, String> {
+fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, Error> {
     #[derive(Debug, PartialEq, Eq)]
     enum State {
         Pre,
@@ -101,10 +102,10 @@ fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, String> {
             (State::Pre, '`') => State::Backtick("".into()),
             (State::Pre, '"') => State::Quote("".into()),
             (State::Pre, ch) => {
-                return Err(format!(
-                    "Unexpected character '{}' when expecting a string",
-                    ch
-                ))
+                return Err(Error::TraefikRuleError {
+                    rule: rule.to_owned(),
+                    message: format!("Unexpected character '{}' when expecting a string", ch),
+                })
             }
 
             (State::Backtick(st), '`') => {
@@ -122,19 +123,22 @@ fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, String> {
 
             (State::EscapedQuote(st), '"') => State::Quote(format!("{}\"", st)),
             (State::EscapedQuote(_), ch) => {
-                return Err(format!(
-                    "Unexpected character '{}' when a control character",
-                    ch
-                ))
+                return Err(Error::TraefikRuleError {
+                    rule: rule.to_owned(),
+                    message: format!("Unexpected character '{}' when a control character", ch),
+                })
             }
 
             (State::Post, ' ' | '\t') => State::Post,
             (State::Post, ',') => State::Pre,
             (State::Post, ch) => {
-                return Err(format!(
-                    "Unexpected character '{}' when expecting a comma or the end of the rule",
-                    ch
-                ))
+                return Err(Error::TraefikRuleError {
+                    rule: rule.to_owned(),
+                    message: format!(
+                        "Unexpected character '{}' when expecting a comma or the end of the rule",
+                        ch
+                    ),
+                })
             }
         }
     }
@@ -142,10 +146,14 @@ fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, String> {
     if state == State::Post || state == State::Pre {
         Ok(hosts)
     } else {
-        Err(format!("Unexpected end of rule (in state {:?})", state))
+        Err(Error::TraefikRuleError {
+            rule: rule.to_owned(),
+            message: format!("Unexpected end of rule (in state {:?})", state),
+        })
     }
 }
 
+#[instrument(fields(source = "traefik"), skip(routers))]
 fn generate_records(
     name: &str,
     traefik_config: &TraefikConfig,
@@ -164,7 +172,7 @@ fn generate_records(
         .filter_map(|r| match parse_hosts(&r.rule) {
             Ok(hosts) => Some(hosts),
             Err(e) => {
-                tracing::warn!("({}) Failed parsing rule for {}: {}", name, r.name, e);
+                tracing::warn!(error = %e, router = r.name, rule = r.rule, "Failed parsing rule");
                 None
             }
         })
@@ -183,14 +191,15 @@ fn generate_records(
 
 async fn traefik_loop(
     name: &str,
+    source_id: &UniqueId,
     traefik_config: &TraefikConfig,
     client: &Client,
-    context: &mut SourceContext,
+    server: &Server,
 ) -> LoopResult {
     tracing::trace!(
-        "({}) Attempting to connect to traefik API at {}...",
         name,
-        traefik_config.url
+        url = traefik_config.url.as_ref(),
+        "Attempting to connect to traefik API",
     );
 
     let version = match api_call::<ApiVersion>(name, client, &traefik_config.url, "version").await {
@@ -199,9 +208,9 @@ async fn traefik_loop(
     };
 
     tracing::debug!(
-        "({}) Connected to traefik version {}.",
         name,
-        version.version
+        traefik_version = version.version,
+        "Connected to traefik",
     );
 
     loop {
@@ -214,24 +223,34 @@ async fn traefik_loop(
             };
 
         let records = generate_records(name, traefik_config, routers);
-        context.send(records);
+        server
+            .add_source_records(SourceRecords::new(source_id, None, records))
+            .await;
 
         sleep(Duration::from_secs(30)).await;
     }
 }
 
-pub(super) fn source(name: String, traefik_config: TraefikConfig, mut context: SourceContext) {
-    let registration = context.abort_registration();
+#[instrument(fields(source = "traefik"), skip(server))]
+pub(super) async fn source(
+    name: String,
+    server: &Server,
+    traefik_config: &TraefikConfig,
+) -> Result<Box<dyn SourceHandle>, Error> {
+    let source_id = server.id.extend(traefik_config.url.as_ref());
 
-    tokio::spawn(Abortable::new(
-        async move {
+    let handle = {
+        let source_id = source_id.clone();
+        let server = server.clone();
+        let traefik_config = traefik_config.clone();
+        tokio::spawn(async move {
             let mut backoff = Backoff::default();
             let client = Client::new();
 
             loop {
-                match traefik_loop(&name, &traefik_config, &client, &mut context).await {
+                match traefik_loop(&name, &source_id, &traefik_config, &client, &server).await {
                     LoopResult::Backoff => {
-                        context.send(RecordSet::new());
+                        server.clear_source_records(&source_id).await;
                         sleep(backoff.next()).await;
                     }
                     LoopResult::Quit => {
@@ -239,9 +258,10 @@ pub(super) fn source(name: String, traefik_config: TraefikConfig, mut context: S
                     }
                 }
             }
-        },
-        registration,
-    ));
+        })
+    };
+
+    Ok(Box::new(SpawnHandle { source_id, handle }))
 }
 
 #[cfg(test)]

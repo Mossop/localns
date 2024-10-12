@@ -1,49 +1,51 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::net::Ipv4Addr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
 
 use bollard::models;
 use bollard::{Docker, API_DEFAULT_VERSION};
-use futures::future::Abortable;
+use figment::value::magic::RelativePathBuf;
 use futures::StreamExt;
 use serde::Deserialize;
 use tokio::time::sleep;
+use tracing::instrument;
 
-use crate::dns::{RData, Record, RecordSet};
-use crate::util::Address;
-use crate::{backoff::Backoff, config::Config};
+use crate::{backoff::Backoff, sources::SpawnHandle, SourceRecords, UniqueId};
+use crate::{
+    dns::{RData, Record, RecordSet},
+    Server,
+};
+use crate::{sources::SourceHandle, util::Address, Error};
 
-use super::SourceContext;
+#[derive(Debug, PartialEq, Deserialize, Clone)]
+pub(crate) struct DockerLocal {}
 
-#[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
-pub struct DockerLocal {}
-
-#[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
-pub struct DockerTls {
+#[derive(Debug, PartialEq, Deserialize, Clone)]
+pub(crate) struct DockerTls {
     pub address: Address,
-    pub private_key: PathBuf,
-    pub certificate: PathBuf,
-    pub ca: PathBuf,
+    pub private_key: RelativePathBuf,
+    pub certificate: RelativePathBuf,
+    pub ca: RelativePathBuf,
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Deserialize, Clone)]
 #[serde(untagged)]
-pub enum DockerConfig {
+pub(crate) enum DockerConfig {
     Address(String),
-    Tls(DockerTls),
+    Tls(Box<DockerTls>),
     Local(DockerLocal),
 }
 
-pub type Labels = HashMap<String, String>;
+type Labels = HashMap<String, String>;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Network {
-    pub id: String,
-    pub name: String,
-    pub driver: Option<String>,
-    pub labels: Labels,
+struct Network {
+    id: String,
+    name: String,
+    driver: Option<String>,
+    labels: Labels,
 }
 
 impl TryFrom<models::Network> for Network {
@@ -60,22 +62,24 @@ impl TryFrom<models::Network> for Network {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ContainerEndpoint {
-    pub network: Network,
-    pub ip: Option<Ipv4Addr>,
+struct ContainerEndpoint {
+    network: Network,
+    ip: Option<Ipv4Addr>,
 }
 
 impl ContainerEndpoint {
     fn try_from(
         state: models::EndpointSettings,
         networks: &HashMap<String, Network>,
-    ) -> Result<Self, String> {
-        let network_id = state
-            .network_id
-            .ok_or_else(|| String::from("Missing network id"))?;
+    ) -> Result<Self, Error> {
+        let network_id = state.network_id.ok_or_else(|| Error::DockerApiError {
+            message: "Missing network id".to_string(),
+        })?;
         let network = networks
             .get(&network_id)
-            .ok_or_else(|| String::from("Unknown network"))?;
+            .ok_or_else(|| Error::DockerApiError {
+                message: "Unknown network".to_string(),
+            })?;
 
         Ok(ContainerEndpoint {
             network: network.clone(),
@@ -85,19 +89,19 @@ impl ContainerEndpoint {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Container {
-    pub id: String,
-    pub names: Vec<String>,
-    pub image: Option<String>,
-    pub networks: HashMap<String, ContainerEndpoint>,
-    pub labels: Labels,
+struct Container {
+    id: String,
+    names: Vec<String>,
+    image: Option<String>,
+    networks: HashMap<String, ContainerEndpoint>,
+    labels: Labels,
 }
 
 impl Container {
     fn try_from(
         state: models::ContainerSummary,
         networks: &HashMap<String, Network>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, Error> {
         let container_networks = match state.network_settings {
             Some(settings) => match settings.networks {
                 Some(mut endpoints) => endpoints
@@ -111,7 +115,9 @@ impl Container {
         };
 
         Ok(Container {
-            id: state.id.ok_or_else(|| String::from("Missing id"))?,
+            id: state.id.ok_or_else(|| Error::DockerApiError {
+                message: "Missing id".to_string(),
+            })?,
             image: state.image,
             names: state.names.unwrap_or_default(),
             networks: container_networks,
@@ -121,19 +127,20 @@ impl Container {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct DockerState {
-    pub networks: HashMap<String, Network>,
-    pub containers: HashMap<String, Container>,
+struct DockerState {
+    networks: HashMap<String, Network>,
+    containers: HashMap<String, Container>,
 }
 
 const DOCKER_TIMEOUT: u64 = 4;
 
-fn check_file(file: &Path) -> Result<(), String> {
-    let metadata =
-        fs::metadata(file).map_err(|e| format!("Failed to read file {}: {}", file.display(), e))?;
+fn check_file(file: &Path) -> Result<(), Error> {
+    let metadata = fs::metadata(file)?;
 
     if !metadata.is_file() {
-        Err(format!("Expected {} to be a file", file.display()))
+        Err(Error::FileTypeError {
+            file: file.to_owned(),
+        })
     } else {
         Ok(())
     }
@@ -153,45 +160,34 @@ fn useful_event(ev: &models::EventMessage) -> bool {
     }
 }
 
-fn connect(name: &str, config: &Config, docker_config: &DockerConfig) -> Result<Docker, String> {
-    match docker_config {
+#[instrument(fields(source = "docker"), skip(docker_config))]
+fn connect(name: &str, docker_config: &DockerConfig) -> Result<Docker, Error> {
+    let docker = match docker_config {
         DockerConfig::Address(address) => {
             if address.starts_with("http://") {
-                tracing::trace!(
-                    "({}) Attempting to connect to docker daemon at {}...",
-                    name,
-                    address
-                );
-                Docker::connect_with_http(address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)
-                    .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
+                tracing::trace!(address, "Attempting to connect to docker daemon over HTTP");
+                Docker::connect_with_http(address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)?
             } else {
-                tracing::trace!(
-                    "({}) Attempting to connect to docker daemon at {}...",
-                    name,
-                    address
-                );
-                Docker::connect_with_local(address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)
-                    .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
+                tracing::trace!(address, "Attempting to connect to local docker daemon");
+                Docker::connect_with_local(address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)?
             }
         }
         DockerConfig::Local(_) => {
-            tracing::trace!("({}) Attempting to connect to local docker daemon...", name);
+            tracing::trace!("Attempting to connect to local docker daemon");
 
-            Docker::connect_with_local_defaults()
-                .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
+            Docker::connect_with_local_defaults()?
         }
         DockerConfig::Tls(tls_config) => {
-            let private_key = config.path(&tls_config.private_key);
+            let private_key = tls_config.private_key.relative();
             check_file(&private_key)?;
-            let certificate = config.path(&tls_config.certificate);
+            let certificate = tls_config.certificate.relative();
             check_file(&certificate)?;
-            let ca = config.path(&tls_config.ca);
+            let ca = tls_config.ca.relative();
             check_file(&ca)?;
 
             tracing::trace!(
-                "({}) Attempting to connect to docker daemon at https://{}/...",
-                name,
-                tls_config.address.address(2376)
+                address = tls_config.address.address(2376),
+                "Attempting to connect to docker daemon over TLS",
             );
 
             Docker::connect_with_ssl(
@@ -201,17 +197,15 @@ fn connect(name: &str, config: &Config, docker_config: &DockerConfig) -> Result<
                 &ca,
                 DOCKER_TIMEOUT,
                 API_DEFAULT_VERSION,
-            )
-            .map_err(|e| format!("Failed to connect to docker daemon: {}", e))
+            )?
         }
-    }
+    };
+
+    Ok(docker)
 }
 
-async fn fetch_state(docker: &Docker) -> Result<DockerState, String> {
-    let mut network_state = docker
-        .list_networks::<&str>(None)
-        .await
-        .map_err(|e| format!("Failed to list networks: {}", e))?;
+async fn fetch_state(docker: &Docker) -> Result<DockerState, Error> {
+    let mut network_state = docker.list_networks::<&str>(None).await?;
 
     let networks = network_state
         .drain(..)
@@ -222,10 +216,7 @@ async fn fetch_state(docker: &Docker) -> Result<DockerState, String> {
         })
         .collect();
 
-    let mut container_state = docker
-        .list_containers::<&str>(None)
-        .await
-        .map_err(|e| format!("Failed to list containers: {}", e))?;
+    let mut container_state = docker.list_containers::<&str>(None).await?;
 
     let containers = container_state
         .drain(..)
@@ -261,6 +252,7 @@ fn visible_networks(state: &DockerState) -> HashSet<String> {
         .collect()
 }
 
+#[instrument(fields(source = "docker"), skip(state))]
 fn generate_records(name: &str, state: DockerState) -> RecordSet {
     let mut records = RecordSet::new();
 
@@ -282,9 +274,8 @@ fn generate_records(name: &str, state: DockerState) -> RecordSet {
 
                 if !seen {
                     tracing::warn!(
-                        "({}) Cannot add record for {} as its 'localns.network' label references an invalid network.",
-                        name,
-                        hostname
+                        hostname,
+                        "Cannot add record as its 'localns.network' label references an invalid network.",
                     )
                 }
             } else {
@@ -303,18 +294,16 @@ fn generate_records(name: &str, state: DockerState) -> RecordSet {
                 if let Some(ip) = possible_ips.first() {
                     if possible_ips.len() > 1 {
                         tracing::warn!(
-                            "({}) Cannot add record for {} as it is present on multiple possible networks.",
-                            name,
-                            hostname
+                            hostname,
+                            "Cannot add record as it is present on multiple possible networks.",
                         );
                     } else {
                         records.insert(Record::new(hostname.into(), RData::A(*ip)));
                     }
                 } else {
                     tracing::warn!(
-                        "({}) Cannot add record for {} as none of its networks appeared usable.",
-                        name,
-                        hostname
+                        hostname,
+                        "Cannot add record as none of its networks appeared usable.",
                     );
                 }
             }
@@ -331,14 +320,14 @@ enum LoopResult {
 
 async fn docker_loop(
     name: &str,
-    config: &Config,
+    source_id: &UniqueId,
     docker_config: &DockerConfig,
-    context: &mut SourceContext,
+    server: &Server,
 ) -> LoopResult {
-    let docker = match connect(name, config, docker_config) {
+    let docker = match connect(name, docker_config) {
         Ok(docker) => docker,
         Err(e) => {
-            tracing::error!("({}) {}", name, e);
+            tracing::error!(source = "docker", error=%e, name, "Error connecting to docker");
             return LoopResult::Backoff;
         }
     };
@@ -346,19 +335,20 @@ async fn docker_loop(
     let version = match docker.version().await {
         Ok(version) => version,
         Err(e) => {
-            tracing::error!("({}) Failed to get docker version: {}", name, e);
+            tracing::error!(source = "docker", error=%e, name, "Failed to get docker version");
             return LoopResult::Backoff;
         }
     };
 
     match (version.version, version.api_version) {
         (Some(v), Some(a)) => tracing::debug!(
-            "({}) Connected to docker daemon version {} (API {:?}).",
+            source = "docker",
             name,
-            v,
-            a
+            version = v,
+            api_version = a,
+            "Connected to docker daemon."
         ),
-        _ => tracing::debug!("({}) Connected to docker daemon.", name),
+        _ => tracing::debug!(source = "docker", name, "Connected to docker daemon."),
     }
 
     let state = match fetch_state(&docker).await {
@@ -370,7 +360,9 @@ async fn docker_loop(
     };
 
     let records = generate_records(name, state);
-    context.send(records);
+    server
+        .add_source_records(SourceRecords::new(source_id, None, records))
+        .await;
 
     let mut events = docker.events::<&str>(None);
     loop {
@@ -386,7 +378,9 @@ async fn docker_loop(
                     };
 
                     let records = generate_records(name, state);
-                    context.send(records);
+                    server
+                        .add_source_records(SourceRecords::new(source_id, None, records))
+                        .await;
                 }
             }
             _ => {
@@ -396,22 +390,26 @@ async fn docker_loop(
     }
 }
 
-pub(super) fn source(
+#[instrument(fields(source = "docker"), skip(server))]
+pub(super) async fn source(
     name: String,
-    config: Config,
-    docker_config: DockerConfig,
-    mut context: SourceContext,
-) {
-    let registration = context.abort_registration();
+    server: &Server,
+    docker_config: &DockerConfig,
+) -> Result<Box<dyn SourceHandle>, Error> {
+    tracing::trace!("Adding source");
+    let source_id = server.id.extend(&name);
 
-    tokio::spawn(Abortable::new(
-        async move {
+    let handle = {
+        let source_id = source_id.clone();
+        let server = server.clone();
+        let docker_config = docker_config.clone();
+        tokio::spawn(async move {
             let mut backoff = Backoff::default();
 
             loop {
-                match docker_loop(&name, &config, &docker_config, &mut context).await {
+                match docker_loop(&name, &source_id, &docker_config, &server).await {
                     LoopResult::Backoff => {
-                        context.send(RecordSet::new());
+                        server.clear_source_records(&source_id).await;
                         sleep(backoff.next()).await;
                     }
                     LoopResult::Retry => {
@@ -419,7 +417,8 @@ pub(super) fn source(
                     }
                 }
             }
-        },
-        registration,
-    ));
+        })
+    };
+
+    Ok(Box::new(SpawnHandle { source_id, handle }))
 }

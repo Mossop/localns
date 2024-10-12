@@ -1,42 +1,45 @@
 use std::{
     fs,
+    future::Future,
     path::{Path, PathBuf},
-    pin::Pin,
-    task::{Context, Poll},
     time::Duration,
 };
 
-use futures::Stream;
-use notify::{Config, Event, EventHandler, PollWatcher, RecursiveMode, Watcher};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use notify::{Config, Event, EventHandler, PollWatcher, RecursiveMode, Watcher as _};
+use tokio::sync::mpsc::{channel, Sender};
 
-pub enum FileEvent {
+use crate::Error;
+
+#[derive(Clone, Copy)]
+pub(crate) enum FileEvent {
     Create,
     Delete,
     Change,
 }
 
-pub struct FileEventStream {
-    _watcher: PollWatcher,
-    receiver: Receiver<FileEvent>,
-}
-
-impl Stream for FileEventStream {
-    type Item = FileEvent;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.receiver.poll_recv(cx)
-    }
+pub(crate) trait WatchListener
+where
+    Self: Send + 'static,
+{
+    fn event(&mut self, event: FileEvent) -> impl Future<Output = ()> + Send;
 }
 
 struct FileWatchState {
+    sender: Sender<FileEvent>,
     path: PathBuf,
     exists: bool,
-    sender: Sender<FileEvent>,
 }
 
 impl FileWatchState {
-    fn new(path: &Path, sender: Sender<FileEvent>) -> Self {
+    fn new<L: WatchListener>(path: &Path, mut listener: L) -> Self {
+        let (sender, mut receiver) = channel(10);
+
+        tokio::spawn(async move {
+            while let Some(event) = receiver.recv().await {
+                listener.event(event).await;
+            }
+        });
+
         Self {
             path: path.to_owned(),
             exists: fs::exists(path).unwrap_or_default(),
@@ -46,7 +49,13 @@ impl FileWatchState {
 }
 
 impl EventHandler for FileWatchState {
-    fn handle_event(&mut self, _: Result<Event, notify::Error>) {
+    fn handle_event(&mut self, event: Result<Event, notify::Error>) {
+        if let Ok(event) = event {
+            if !event.need_rescan() && !event.paths.contains(&self.path) {
+                return;
+            }
+        }
+
         let now_exists = fs::exists(&self.path).unwrap_or_default();
 
         let event = match (now_exists, self.exists) {
@@ -56,31 +65,41 @@ impl EventHandler for FileWatchState {
             _ => return,
         };
 
-        let _ = self.sender.blocking_send(event);
+        if let Err(e) = self.sender.blocking_send(event) {
+            tracing::error!(error = %e, "Error sending file event")
+        }
     }
 }
 
-pub fn watch(path: &Path) -> Result<FileEventStream, String> {
-    let (sender, receiver) = channel(10);
+pub(crate) struct Watcher {
+    path: PathBuf,
+    _watcher: PollWatcher,
+}
 
-    let watch_state = FileWatchState::new(path, sender);
+impl Drop for Watcher {
+    fn drop(&mut self) {
+        tracing::trace!(path = %self.path.display(), "Dropping file watcher");
+    }
+}
+
+pub(crate) fn watch<L: WatchListener>(path: &Path, listener: L) -> Result<Watcher, Error> {
+    tracing::trace!(path = %path.display(), "Starting file watcher");
+
+    let watch_state = FileWatchState::new(path, listener);
     let mut watcher = PollWatcher::new(
         watch_state,
         Config::default().with_poll_interval(Duration::from_millis(500)),
-    )
-    .map_err(|e| format!("Unable to watch file {}: {}", path.display(), e))?;
+    )?;
 
     let watch_path = match path.parent() {
         Some(parent) => parent,
         None => path,
     };
 
-    watcher
-        .watch(watch_path, RecursiveMode::Recursive)
-        .map_err(|e| format!("Unable to watch file {}: {}", path.display(), e))?;
+    watcher.watch(watch_path, RecursiveMode::Recursive)?;
 
-    Ok(FileEventStream {
+    Ok(Watcher {
+        path: path.to_owned(),
         _watcher: watcher,
-        receiver,
     })
 }

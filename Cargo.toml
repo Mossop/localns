@@ -21,10 +21,14 @@ notify = "^6.1.1"
 hickory-server = "^0.24.1"
 hickory-client = "^0.24.1"
 async-trait = "^0.1.83"
-uuid = { version = "^1.4.0", features = ["v4"] }
 actix-web = "^4.3.1"
-debounced = "^0.2.0"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 clap = { version = "4.5.20", features = ["derive"] }
 figment = { version = "0.10.19", features = ["yaml", "env"] }
+chrono = "0.4.38"
+sha2 = "0.10.8"
+rand = "0.8.5"
+hex = "0.4.3"
+thiserror = "1.0.64"
+ctrlc = { version = "3.4.5", features=["termination"] }

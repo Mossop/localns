@@ -3,23 +3,19 @@ use figment::{
     value::{Uncased, UncasedStr},
     Figment,
 };
-use futures::StreamExt;
 use hickory_server::{proto::rr, proto::rr::rdata::SOA};
-use std::{
-    collections::HashMap,
-    env, fmt,
-    path::{Path, PathBuf},
-};
-use tokio::sync::watch;
+use std::{collections::HashMap, fmt, path::Path};
 
 use crate::{
-    api::ApiConfig, dns::Fqdn, dns::ServerConfig, dns::Upstream, sources::SourceConfig,
-    watcher::watch,
+    api::ApiConfig,
+    dns::{Fqdn, ServerConfig, Upstream},
+    error::Error,
+    sources::SourceConfig,
 };
 
 mod file;
 
-pub use file::deserialize_url;
+pub(crate) use file::deserialize_url;
 
 pub struct ZoneConfig {
     origin: Option<Fqdn>,
@@ -135,9 +131,8 @@ fn map_env(key: &UncasedStr) -> Uncased<'_> {
         .into()
 }
 
-#[derive(Clone, Default, Debug, PartialEq, Eq)]
-pub struct Config {
-    pub config_file: PathBuf,
+#[derive(Clone, Default, Debug, PartialEq)]
+pub(crate) struct Config {
     pub server: ServerConfig,
     pub api: Option<ApiConfig>,
     pub sources: SourceConfig,
@@ -145,15 +140,15 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn from_file(config_file: &Path) -> Result<Config, String> {
+    pub(crate) fn from_file(config_file: &Path) -> Result<Config, Error> {
+        tracing::info!(config_file = %config_file.display(), "Reading configuration");
+
         let config: file::ConfigFile = Figment::new()
             .join(Env::prefixed("LOCALNS_").map(map_env).lowercase(false))
             .join(Yaml::file_exact(config_file))
-            .extract()
-            .map_err(|e| format!("Failed parsing config: {e}"))?;
+            .extract()?;
 
         Ok(Config {
-            config_file: config_file.to_owned(),
             server: config.server,
             api: config.api,
             sources: config.sources,
@@ -161,83 +156,7 @@ impl Config {
         })
     }
 
-    pub fn path(&self, path: &Path) -> PathBuf {
-        self.config_file.parent().unwrap().join(path)
-    }
-
-    pub fn default(config_file: &Path) -> Self {
-        Config {
-            config_file: config_file.to_owned(),
-            ..Default::default()
-        }
-    }
-
-    pub fn zone_config(&self, name: &Fqdn) -> ZoneConfig {
+    pub(crate) fn zone_config(&self, name: &Fqdn) -> ZoneConfig {
         self.zones.build_config(name)
     }
-}
-
-pub fn config_stream(args: Option<&str>) -> watch::Receiver<Config> {
-    let config_file = config_file(args);
-    tracing::info!("Reading configuration from {}.", config_file.display());
-    let mut file_stream = watch(&config_file).unwrap();
-
-    let mut config = Config::from_file(&config_file);
-
-    let (sender, receiver) = watch::channel(match config {
-        Ok(ref c) => c.clone(),
-        Err(ref e) => {
-            tracing::error!("{}", e);
-            Config::default(&config_file)
-        }
-    });
-
-    tokio::spawn(async move {
-        loop {
-            file_stream.next().await;
-
-            let next_config = Config::from_file(&config_file);
-            if next_config == config {
-                continue;
-            }
-
-            match next_config {
-                Ok(ref actual_config) => {
-                    if let Err(e) = sender.send(actual_config.clone()) {
-                        tracing::error!("Failed to send updated config: {}", e);
-                        return;
-                    }
-
-                    if config.is_err() {
-                        tracing::info!("Successfully read new config");
-                    }
-                }
-                Err(ref e) => {
-                    if config.as_ref() != Err(e) {
-                        tracing::error!("{}", e);
-                    }
-                }
-            }
-
-            config = next_config;
-        }
-    });
-
-    receiver
-}
-
-fn config_file(arg: Option<&str>) -> PathBuf {
-    if let Some(str) = arg {
-        PathBuf::from(str).canonicalize().unwrap()
-    } else if let Ok(value) = env::var("LOCALNS_CONFIG") {
-        PathBuf::from(value).canonicalize().unwrap()
-    } else {
-        PathBuf::from("config.yaml").canonicalize().unwrap()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn zone_config() {}
 }

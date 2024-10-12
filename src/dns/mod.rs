@@ -4,8 +4,7 @@ use hickory_server::ServerFuture;
 use serde::Deserialize;
 use tokio::{
     net::{TcpListener, UdpSocket},
-    select,
-    sync::{watch, Mutex},
+    sync::RwLock,
 };
 
 mod handler;
@@ -15,85 +14,79 @@ mod upstream;
 
 use crate::config::Config;
 
-use self::{handler::Handler, server::Server};
+use self::handler::Handler;
 
-pub use record::{Fqdn, RData, RDataConfig, Record, RecordSet, RecordSource};
-pub use upstream::Upstream;
+pub(crate) use record::{Fqdn, RData, RDataConfig, Record, RecordSet, RecordSource};
+pub(crate) use upstream::Upstream;
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
-pub struct ServerConfig {
+pub(crate) struct ServerConfig {
     #[serde(default)]
     port: Option<u16>,
 }
 
-async fn create_dns_server(config: &Config, server: Arc<Mutex<Server>>) -> ServerFuture<Handler> {
-    let handler = Handler { server };
-
-    let port = config.server.port.unwrap_or(53);
-    tracing::trace!("Server listening on port {}", port);
-
-    let mut server = ServerFuture::new(handler);
-
-    match UdpSocket::bind(("0.0.0.0", port)).await {
-        Ok(socket) => server.register_socket(socket),
-        Err(e) => tracing::error!("Unable to open UDP socket: {}", e),
-    }
-
-    match TcpListener::bind(("0.0.0.0", port)).await {
-        Ok(socket) => server.register_listener(socket, Duration::from_millis(500)),
-        Err(e) => tracing::error!("Unable to open TCP socket: {}", e),
-    }
-
-    server
+#[derive(Debug, Clone)]
+pub(crate) struct ServerState {
+    pub(crate) records: RecordSet,
+    pub(crate) config: Config,
 }
 
-pub fn create_server(
-    mut config_stream: watch::Receiver<Config>,
-    mut record_stream: watch::Receiver<RecordSet>,
-) {
-    tokio::spawn(async move {
-        let mut config = config_stream.borrow_and_update().clone();
-        let mut records = record_stream.borrow_and_update().clone();
+pub(crate) struct DnsServer {
+    server_state: Arc<RwLock<ServerState>>,
+    server: ServerFuture<Handler>,
+}
 
-        let server = Arc::new(Mutex::new(Server::new(config.clone(), records.clone())));
-        let mut dns_server = create_dns_server(&config, server.clone()).await;
-
-        loop {
-            select! {
-                result = config_stream.changed() => {
-                    if result.is_err() {
-                        return;
-                    }
-
-                    let new_config = config_stream.borrow().clone();
-                    {
-                        let mut server = server.lock().await;
-                        server.update_config(new_config.clone());
-                    }
-
-                    if config.server != new_config.server {
-                        if let Err(e) = dns_server.block_until_done().await {
-                            tracing::error!("Error waiting for DNS server to shutdown: {}", e);
-                        }
-
-                        dns_server = create_dns_server(&new_config, server.clone()).await;
-                    }
-
-                    config = new_config;
-                },
-                result = record_stream.changed() => {
-                    if result.is_err() {
-                        return;
-                    }
-
-                    let new_records = record_stream.borrow().clone();
-                    if new_records != records {
-                        records = new_records;
-                        let mut server = server.lock().await;
-                        server.update_records(records.clone());
-                    }
-                }
-            }
+impl DnsServer {
+    pub(crate) async fn new(server_state: Arc<RwLock<ServerState>>) -> Self {
+        Self {
+            server_state: server_state.clone(),
+            server: Self::build_server(server_state).await,
         }
-    });
+    }
+
+    pub(crate) async fn shutdown(&mut self) {
+        tracing::debug!("Shutting down DNS service");
+
+        if let Err(e) = self.server.shutdown_gracefully().await {
+            tracing::error!(error = %e, "Failure while shutting down DNS server.");
+        }
+    }
+
+    pub(crate) async fn restart(&mut self) {
+        tracing::debug!("Restarting DNS service");
+
+        if let Err(e) = self.server.block_until_done().await {
+            tracing::error!(error = %e, "Failure while shutting down DNS server.");
+        }
+
+        self.server = Self::build_server(self.server_state.clone()).await;
+    }
+
+    async fn build_server(server_state: Arc<RwLock<ServerState>>) -> ServerFuture<Handler> {
+        let server_config = server_state.read().await.config.server.clone();
+
+        let handler = Handler { server_state };
+
+        let port = server_config.port.unwrap_or(53);
+
+        let mut server = ServerFuture::new(handler);
+
+        match UdpSocket::bind(("0.0.0.0", port)).await {
+            Ok(socket) => {
+                tracing::info!("Server listening on udp://0.0.0.0:{}", port);
+                server.register_socket(socket);
+            }
+            Err(e) => tracing::error!(error = %e, "Unable to open UDP socket"),
+        }
+
+        match TcpListener::bind(("0.0.0.0", port)).await {
+            Ok(socket) => {
+                tracing::info!("Server listening on tcp://0.0.0.0:{}", port);
+                server.register_listener(socket, Duration::from_millis(500));
+            }
+            Err(e) => tracing::error!(error = %e, "Unable to open TCP socket"),
+        }
+
+        server
+    }
 }

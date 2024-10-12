@@ -11,17 +11,15 @@ use serde::Deserialize;
 use tokio::net::UdpSocket;
 use tracing::Level;
 
-use crate::{event_lvl, util::Address};
+use crate::{event_lvl, util::Address, Error};
 
-pub type UpstreamConfig = Address;
+pub(crate) type UpstreamConfig = Address;
 
-async fn connect_client(address: SocketAddr) -> Result<AsyncClient, String> {
+async fn connect_client(address: SocketAddr) -> Result<AsyncClient, Error> {
     let stream = UdpClientStream::<UdpSocket>::new(address);
 
     let client = AsyncClient::connect(stream);
-    let (client, bg) = client
-        .await
-        .map_err(|e| format!("Failed to connect to DNS server: {}", e))?;
+    let (client, bg) = client.await?;
     tokio::spawn(bg);
 
     Ok(client)
@@ -64,7 +62,7 @@ impl Upstream {
         let address = match self.config.to_socket_address(53) {
             Ok(addr) => addr,
             Err(e) => {
-                tracing::error!("Unable to lookup nameserver: {}", e);
+                tracing::error!(error = %e, "Unable to lookup nameserver");
                 return None;
             }
         };
@@ -72,7 +70,7 @@ impl Upstream {
         let mut client = match connect_client(address).await {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!("{}", e);
+                tracing::error!(error = %e);
                 return None;
             }
         };
@@ -104,7 +102,7 @@ impl Upstream {
                 Some(response)
             }
             Err(e) => {
-                tracing::warn!("Upstream DNS server returned error: {}", e);
+                tracing::warn!(error = %e, "Upstream DNS server returned error");
                 None
             }
         }

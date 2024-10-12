@@ -4,28 +4,26 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use futures::{future::Abortable, StreamExt};
+use figment::value::magic::RelativePathBuf;
+use tracing::instrument;
 
 use crate::{
-    config::Config,
     dns::{Fqdn, RDataConfig, Record, RecordSet},
-    watcher::{watch, FileEvent},
+    sources::{SourceHandle, WatcherHandle},
+    watcher::{watch, FileEvent, WatchListener},
+    Error, Server, SourceRecords, UniqueId,
 };
 
-use super::SourceContext;
-
-pub type FileConfig = PathBuf;
+pub(crate) type FileConfig = RelativePathBuf;
 
 type LeaseFile = HashMap<Fqdn, RDataConfig>;
 
-fn parse_file(name: &str, lease_file: &Path) -> Result<RecordSet, String> {
-    tracing::trace!("({}) Parsing lease file {}...", name, lease_file.display());
+#[instrument(fields(source = "file"), err)]
+fn parse_file(name: &str, lease_file: &Path) -> Result<RecordSet, Error> {
+    tracing::trace!("Parsing lease file");
 
-    let f = File::open(lease_file)
-        .map_err(|e| format!("Failed to open file at {}: {}", lease_file.display(), e))?;
-
-    let leases: LeaseFile =
-        serde_yaml::from_reader(f).map_err(|e| format!("Failed to parse leases: {}", e))?;
+    let f = File::open(lease_file)?;
+    let leases: LeaseFile = serde_yaml::from_reader(f)?;
 
     let mut records = RecordSet::new();
 
@@ -36,58 +34,53 @@ fn parse_file(name: &str, lease_file: &Path) -> Result<RecordSet, String> {
     Ok(records)
 }
 
-pub(super) fn source(
+struct SourceWatcher {
+    source_id: UniqueId,
     name: String,
-    config: Config,
-    file_config: FileConfig,
-    mut context: SourceContext,
-) {
-    let lease_file = config.path(&file_config);
+    lease_file: PathBuf,
+    server: Server,
+}
 
-    let registration = context.abort_registration();
-    tokio::spawn(Abortable::new(
-        async move {
-            let records = if lease_file.exists() {
-                match parse_file(&name, &lease_file) {
-                    Ok(records) => records,
-                    Err(e) => {
-                        tracing::error!("({}) {}", name, e);
-                        RecordSet::new()
-                    }
-                }
-            } else {
-                tracing::warn!("({}) file {} is missing.", name, lease_file.display());
-                RecordSet::new()
-            };
+impl WatchListener for SourceWatcher {
+    async fn event(&mut self, _: FileEvent) {
+        let records = parse_file(&self.name, &self.lease_file).unwrap_or_default();
 
-            context.send(records);
+        self.server
+            .add_source_records(SourceRecords::new(&self.source_id, None, records))
+            .await;
+    }
+}
 
-            let mut stream = match watch(&lease_file) {
-                Ok(stream) => stream,
-                Err(e) => {
-                    tracing::error!("({}) {}", name, e);
-                    return;
-                }
-            };
+#[instrument(fields(source = "file"), skip(server))]
+pub(super) async fn source(
+    name: String,
+    server: &Server,
+    file_config: &FileConfig,
+) -> Result<Box<dyn SourceHandle>, Error> {
+    tracing::trace!("Adding source");
+    let lease_file = file_config.relative();
+    let source_id = server.id.extend(&lease_file.to_string_lossy());
 
-            while let Some(ev) = stream.next().await {
-                let records = match ev {
-                    FileEvent::Delete => {
-                        tracing::warn!("({}) dhcp file {} is missing.", name, lease_file.display());
-                        RecordSet::new()
-                    }
-                    _ => match parse_file(&name, &lease_file) {
-                        Ok(records) => records,
-                        Err(e) => {
-                            tracing::error!("({}) {}", name, e);
-                            RecordSet::new()
-                        }
-                    },
-                };
+    server
+        .add_source_records(SourceRecords::new(
+            &source_id,
+            None,
+            parse_file(&name, &lease_file).unwrap_or_default(),
+        ))
+        .await;
 
-                context.send(records);
-            }
+    let watcher = watch(
+        &lease_file.clone(),
+        SourceWatcher {
+            source_id: source_id.clone(),
+            server: server.clone(),
+            name,
+            lease_file,
         },
-        registration,
-    ));
+    )?;
+
+    Ok(Box::new(WatcherHandle {
+        source_id,
+        _watcher: watcher,
+    }))
 }

@@ -1,16 +1,20 @@
 use std::time::Duration;
 
-use futures::future::Abortable;
 use reqwest::{Client, Url};
 use serde::{de::DeserializeOwned, Deserialize};
 use tokio::time::sleep;
+use tracing::instrument;
 
-use crate::{backoff::Backoff, config::deserialize_url, dns::RecordSet};
-
-use super::SourceContext;
+use crate::{
+    backoff::Backoff,
+    config::deserialize_url,
+    dns::RecordSet,
+    sources::{SourceHandle, SpawnHandle},
+    Error, Server, SourceRecords, UniqueId,
+};
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
-pub struct RemoteConfig {
+pub(crate) struct RemoteConfig {
     #[serde(deserialize_with = "deserialize_url")]
     url: Url,
 }
@@ -51,14 +55,16 @@ where
 
 async fn remote_loop(
     name: &str,
+    source_id: &UniqueId,
     remote_config: &RemoteConfig,
     client: &Client,
-    context: &mut SourceContext,
+    server: &Server,
 ) -> LoopResult {
     tracing::trace!(
-        "({}) Attempting to connect to remote server at {}...",
+        source = "remote",
         name,
-        remote_config.url
+        url = %remote_config.url,
+        "Attempting to connect to remote server",
     );
 
     let mut records = RecordSet::new();
@@ -73,30 +79,42 @@ async fn remote_loop(
         if new_records != records {
             records = new_records;
             tracing::trace!(
-                "({}) Retrieved {} records from the remote server.",
+                source = "remote",
                 name,
-                records.len()
+                records = records.len(),
+                "Retrieved remote records",
             );
 
-            context.send(records.clone());
+            server
+                .add_source_records(SourceRecords::new(source_id, None, records.clone()))
+                .await;
         }
 
         sleep(Duration::from_secs(30)).await;
     }
 }
 
-pub(super) fn source(name: String, remote_config: RemoteConfig, mut context: SourceContext) {
-    let registration = context.abort_registration();
+#[instrument(fields(source = "remote"), skip(server))]
+pub(super) async fn source(
+    name: String,
+    server: &Server,
+    remote_config: &RemoteConfig,
+) -> Result<Box<dyn SourceHandle>, Error> {
+    tracing::trace!("Adding source");
+    let source_id = server.id.extend(remote_config.url.as_ref());
 
-    tokio::spawn(Abortable::new(
-        async move {
+    let handle = {
+        let source_id = source_id.clone();
+        let remote_config = remote_config.clone();
+        let server = server.clone();
+        tokio::spawn(async move {
             let mut backoff = Backoff::default();
             let client = Client::new();
 
             loop {
-                match remote_loop(&name, &remote_config, &client, &mut context).await {
+                match remote_loop(&name, &source_id, &remote_config, &client, &server).await {
                     LoopResult::Backoff => {
-                        context.send(RecordSet::new());
+                        server.clear_source_records(&source_id).await;
                         sleep(backoff.next()).await;
                     }
                     LoopResult::Quit => {
@@ -104,7 +122,8 @@ pub(super) fn source(name: String, remote_config: RemoteConfig, mut context: Sou
                     }
                 }
             }
-        },
-        registration,
-    ));
+        })
+    };
+
+    Ok(Box::new(SpawnHandle { source_id, handle }))
 }

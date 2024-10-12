@@ -13,7 +13,7 @@ use std::{
 use hickory_server::proto::rr::{self, rdata, DNSClass, Name, RecordType};
 use serde::{Deserialize, Serialize};
 
-use crate::{config::ZoneConfig, util::upsert};
+use crate::config::ZoneConfig;
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Hash)]
 pub enum RData {
@@ -152,7 +152,7 @@ impl Fqdn {
                 Ok(name) => name.into(),
                 Err(e) => {
                     let full = format!("{}.{}", host.as_ref(), name);
-                    tracing::warn!("Name {} is an invalid domain name: {}", full, e);
+                    tracing::warn!(name = full, error = %e, "Invalid domain name");
                     Fqdn::Invalid(full)
                 }
             },
@@ -230,7 +230,7 @@ impl From<String> for Fqdn {
                 name.into()
             }
             Err(e) => {
-                tracing::warn!("Name {} is an invalid domain name: {}", str, e);
+                tracing::warn!(name = str, error = %e, "Invalid domain name");
                 Fqdn::Invalid(str)
             }
         }
@@ -245,7 +245,7 @@ impl From<&String> for Fqdn {
                 Fqdn::Valid(name)
             }
             Err(e) => {
-                tracing::warn!("Name {} is an invalid domain name: {}", str, e);
+                tracing::warn!(name = str, error = %e, "Invalid domain name");
                 Fqdn::Invalid(str.clone())
             }
         }
@@ -260,7 +260,7 @@ impl From<&str> for Fqdn {
                 Fqdn::Valid(name)
             }
             Err(e) => {
-                tracing::warn!("Name {} is an invalid domain name: {}", str, e);
+                tracing::warn!(name = str, error = %e, "Invalid domain name");
                 Fqdn::Invalid(str.into())
             }
         }
@@ -364,7 +364,7 @@ impl RecordSet {
             return;
         }
 
-        let inner = upsert(&mut self.records, name);
+        let inner = self.records.entry(name.clone()).or_default();
         for record in records {
             assert_eq!(record.name(), name);
 

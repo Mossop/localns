@@ -7,9 +7,9 @@ use tracing::instrument;
 
 use crate::{
     dns::{Fqdn, RData, Record, RecordSet},
-    sources::{SourceHandle, WatcherHandle},
+    sources::{SourceConfig, SourceId, SourceType, WatcherHandle},
     watcher::{watch, FileEvent, WatchListener},
-    Error, Server, SourceRecords, UniqueId,
+    Error, Server, SourceRecords,
 };
 
 #[derive(Debug, PartialEq, Deserialize, Clone)]
@@ -38,8 +38,12 @@ fn parse_dnsmasq(dhcp_config: &DhcpConfig, data: &str) -> RecordSet {
     records
 }
 
-#[instrument(fields(source = "dhcp"))]
-async fn parse_file(name: &str, dhcp_config: &DhcpConfig, lease_file: &Path) -> RecordSet {
+#[instrument(fields(%source_id), )]
+async fn parse_file(
+    source_id: &SourceId,
+    dhcp_config: &DhcpConfig,
+    lease_file: &Path,
+) -> RecordSet {
     tracing::trace!("Parsing dhcp lease file");
 
     let data = match read_to_string(lease_file).await {
@@ -54,8 +58,7 @@ async fn parse_file(name: &str, dhcp_config: &DhcpConfig, lease_file: &Path) -> 
 }
 
 struct SourceWatcher {
-    source_id: UniqueId,
-    name: String,
+    source_id: SourceId,
     dhcp_config: DhcpConfig,
     lease_file: PathBuf,
     server: Server,
@@ -63,7 +66,7 @@ struct SourceWatcher {
 
 impl WatchListener for SourceWatcher {
     async fn event(&mut self, _: FileEvent) {
-        let records = parse_file(&self.name, &self.dhcp_config, &self.lease_file).await;
+        let records = parse_file(&self.source_id, &self.dhcp_config, &self.lease_file).await;
 
         self.server
             .add_source_records(SourceRecords::new(&self.source_id, None, records))
@@ -71,37 +74,36 @@ impl WatchListener for SourceWatcher {
     }
 }
 
-#[instrument(fields(source = "dhcp"), skip(server))]
-pub(super) async fn source(
-    name: String,
-    server: &Server,
-    dhcp_config: &DhcpConfig,
-) -> Result<Box<dyn SourceHandle>, Error> {
-    tracing::trace!("Adding source");
-    let lease_file = dhcp_config.lease_file.relative();
-    let source_id = server.id.extend(&lease_file.to_string_lossy());
+impl SourceConfig for DhcpConfig {
+    type Handle = WatcherHandle;
 
-    server
-        .add_source_records(SourceRecords::new(
-            &source_id,
-            None,
-            parse_file(&name, dhcp_config, &lease_file).await,
-        ))
-        .await;
+    fn source_type() -> SourceType {
+        SourceType::Dhcp
+    }
 
-    let watcher = watch(
-        &lease_file.clone(),
-        SourceWatcher {
-            source_id: source_id.clone(),
-            server: server.clone(),
-            dhcp_config: dhcp_config.clone(),
-            name,
-            lease_file,
-        },
-    )?;
+    #[instrument(fields(%source_id), skip(self, server))]
+    async fn spawn(self, source_id: SourceId, server: &Server) -> Result<WatcherHandle, Error> {
+        tracing::trace!("Adding source");
+        let lease_file = self.lease_file.relative();
 
-    Ok(Box::new(WatcherHandle {
-        source_id,
-        _watcher: watcher,
-    }))
+        server
+            .add_source_records(SourceRecords::new(
+                &source_id,
+                None,
+                parse_file(&source_id, &self, &lease_file).await,
+            ))
+            .await;
+
+        let watcher = watch(
+            &lease_file.clone(),
+            SourceWatcher {
+                source_id,
+                server: server.clone(),
+                dhcp_config: self,
+                lease_file,
+            },
+        )?;
+
+        Ok(WatcherHandle { _watcher: watcher })
+    }
 }

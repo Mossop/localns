@@ -9,8 +9,8 @@ use crate::{
     backoff::Backoff,
     config::deserialize_url,
     dns::{Fqdn, RData, RDataConfig, Record, RecordSet},
-    sources::{SourceHandle, SpawnHandle},
-    Error, Server, SourceRecords, UniqueId,
+    sources::{SourceConfig, SourceId, SourceType, SpawnHandle},
+    Error, Server, SourceRecords,
 };
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
@@ -39,9 +39,9 @@ enum LoopResult {
     Quit,
 }
 
-#[instrument(fields(source = "traefik"), skip(client))]
+#[instrument(fields(%source_id), skip(client))]
 async fn api_call<T>(
-    name: &str,
+    source_id: &SourceId,
     client: &Client,
     base_url: &Url,
     method: &str,
@@ -153,9 +153,9 @@ fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, Error> {
     }
 }
 
-#[instrument(fields(source = "traefik"), skip(routers))]
+#[instrument(fields(%source_id), skip(routers, traefik_config))]
 fn generate_records(
-    name: &str,
+    source_id: &SourceId,
     traefik_config: &TraefikConfig,
     routers: Vec<ApiRouter>,
 ) -> RecordSet {
@@ -190,39 +190,42 @@ fn generate_records(
 }
 
 async fn traefik_loop(
-    name: &str,
-    source_id: &UniqueId,
+    source_id: &SourceId,
     traefik_config: &TraefikConfig,
     client: &Client,
     server: &Server,
 ) -> LoopResult {
     tracing::trace!(
-        name,
-        url = traefik_config.url.as_ref(),
+        %source_id,
         "Attempting to connect to traefik API",
     );
 
-    let version = match api_call::<ApiVersion>(name, client, &traefik_config.url, "version").await {
-        Ok(r) => r,
-        Err(result) => return result,
-    };
+    let version =
+        match api_call::<ApiVersion>(source_id, client, &traefik_config.url, "version").await {
+            Ok(r) => r,
+            Err(result) => return result,
+        };
 
     tracing::debug!(
-        name,
+        %source_id,
         traefik_version = version.version,
         "Connected to traefik",
     );
 
     loop {
-        let routers =
-            match api_call::<Vec<ApiRouter>>(name, client, &traefik_config.url, "http/routers")
-                .await
-            {
-                Ok(r) => r,
-                Err(result) => return result,
-            };
+        let routers = match api_call::<Vec<ApiRouter>>(
+            source_id,
+            client,
+            &traefik_config.url,
+            "http/routers",
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(result) => return result,
+        };
 
-        let records = generate_records(name, traefik_config, routers);
+        let records = generate_records(source_id, traefik_config, routers);
         server
             .add_source_records(SourceRecords::new(source_id, None, records))
             .await;
@@ -231,37 +234,38 @@ async fn traefik_loop(
     }
 }
 
-#[instrument(fields(source = "traefik"), skip(server))]
-pub(super) async fn source(
-    name: String,
-    server: &Server,
-    traefik_config: &TraefikConfig,
-) -> Result<Box<dyn SourceHandle>, Error> {
-    let source_id = server.id.extend(traefik_config.url.as_ref());
+impl SourceConfig for TraefikConfig {
+    type Handle = SpawnHandle;
 
-    let handle = {
-        let source_id = source_id.clone();
-        let server = server.clone();
-        let traefik_config = traefik_config.clone();
-        tokio::spawn(async move {
-            let mut backoff = Backoff::default();
-            let client = Client::new();
+    fn source_type() -> SourceType {
+        SourceType::Traefik
+    }
 
-            loop {
-                match traefik_loop(&name, &source_id, &traefik_config, &client, &server).await {
-                    LoopResult::Backoff => {
-                        server.clear_source_records(&source_id).await;
-                        sleep(backoff.next()).await;
-                    }
-                    LoopResult::Quit => {
-                        return;
+    #[instrument(fields(%source_id), skip(self, server))]
+    async fn spawn(self, source_id: SourceId, server: &Server) -> Result<SpawnHandle, Error> {
+        let handle = {
+            let source_id = source_id.clone();
+            let server = server.clone();
+            tokio::spawn(async move {
+                let mut backoff = Backoff::default();
+                let client = Client::new();
+
+                loop {
+                    match traefik_loop(&source_id, &self, &client, &server).await {
+                        LoopResult::Backoff => {
+                            server.clear_source_records(&source_id).await;
+                            sleep(backoff.next()).await;
+                        }
+                        LoopResult::Quit => {
+                            return;
+                        }
                     }
                 }
-            }
-        })
-    };
+            })
+        };
 
-    Ok(Box::new(SpawnHandle { source_id, handle }))
+        Ok(SpawnHandle { handle })
+    }
 }
 
 #[cfg(test)]

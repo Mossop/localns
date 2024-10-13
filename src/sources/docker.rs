@@ -12,12 +12,16 @@ use serde::Deserialize;
 use tokio::time::sleep;
 use tracing::instrument;
 
-use crate::{backoff::Backoff, sources::SpawnHandle, SourceRecords, UniqueId};
+use crate::{
+    backoff::Backoff,
+    sources::{SourceConfig, SourceId, SourceType, SpawnHandle},
+    SourceRecords,
+};
 use crate::{
     dns::{RData, Record, RecordSet},
     Server,
 };
-use crate::{sources::SourceHandle, util::Address, Error};
+use crate::{util::Address, Error};
 
 #[derive(Debug, PartialEq, Deserialize, Clone)]
 pub(crate) struct DockerLocal {}
@@ -160,8 +164,8 @@ fn useful_event(ev: &models::EventMessage) -> bool {
     }
 }
 
-#[instrument(fields(source = "docker"), skip(docker_config))]
-fn connect(name: &str, docker_config: &DockerConfig) -> Result<Docker, Error> {
+#[instrument(fields(%source_id), skip(docker_config))]
+fn connect(source_id: &SourceId, docker_config: &DockerConfig) -> Result<Docker, Error> {
     let docker = match docker_config {
         DockerConfig::Address(address) => {
             if address.starts_with("http://") {
@@ -252,8 +256,8 @@ fn visible_networks(state: &DockerState) -> HashSet<String> {
         .collect()
 }
 
-#[instrument(fields(source = "docker"), skip(state))]
-fn generate_records(name: &str, state: DockerState) -> RecordSet {
+#[instrument(fields(%source_id), skip(state))]
+fn generate_records(source_id: &SourceId, state: DockerState) -> RecordSet {
     let mut records = RecordSet::new();
 
     let networks = visible_networks(&state);
@@ -319,15 +323,14 @@ enum LoopResult {
 }
 
 async fn docker_loop(
-    name: &str,
-    source_id: &UniqueId,
+    source_id: &SourceId,
     docker_config: &DockerConfig,
     server: &Server,
 ) -> LoopResult {
-    let docker = match connect(name, docker_config) {
+    let docker = match connect(source_id, docker_config) {
         Ok(docker) => docker,
         Err(e) => {
-            tracing::error!(source = "docker", error=%e, name, "Error connecting to docker");
+            tracing::error!(%source_id, error=%e, "Error connecting to docker");
             return LoopResult::Backoff;
         }
     };
@@ -335,31 +338,30 @@ async fn docker_loop(
     let version = match docker.version().await {
         Ok(version) => version,
         Err(e) => {
-            tracing::error!(source = "docker", error=%e, name, "Failed to get docker version");
+            tracing::error!(%source_id, error=%e, "Failed to get docker version");
             return LoopResult::Backoff;
         }
     };
 
     match (version.version, version.api_version) {
         (Some(v), Some(a)) => tracing::debug!(
-            source = "docker",
-            name,
+            %source_id,
             version = v,
             api_version = a,
             "Connected to docker daemon."
         ),
-        _ => tracing::debug!(source = "docker", name, "Connected to docker daemon."),
+        _ => tracing::debug!(%source_id, "Connected to docker daemon."),
     }
 
     let state = match fetch_state(&docker).await {
         Ok(state) => state,
         Err(e) => {
-            tracing::error!("({}) {}", name, e);
+            tracing::error!(%source_id, error = %e);
             return LoopResult::Backoff;
         }
     };
 
-    let records = generate_records(name, state);
+    let records = generate_records(source_id, state);
     server
         .add_source_records(SourceRecords::new(source_id, None, records))
         .await;
@@ -372,12 +374,12 @@ async fn docker_loop(
                     let state = match fetch_state(&docker).await {
                         Ok(state) => state,
                         Err(e) => {
-                            tracing::error!("({}) {}", name, e);
+                            tracing::error!(%source_id, error = %e);
                             return LoopResult::Backoff;
                         }
                     };
 
-                    let records = generate_records(name, state);
+                    let records = generate_records(source_id, state);
                     server
                         .add_source_records(SourceRecords::new(source_id, None, records))
                         .await;
@@ -390,35 +392,37 @@ async fn docker_loop(
     }
 }
 
-#[instrument(fields(source = "docker"), skip(server))]
-pub(super) async fn source(
-    name: String,
-    server: &Server,
-    docker_config: &DockerConfig,
-) -> Result<Box<dyn SourceHandle>, Error> {
-    tracing::trace!("Adding source");
-    let source_id = server.id.extend(&name);
+impl SourceConfig for DockerConfig {
+    type Handle = SpawnHandle;
 
-    let handle = {
-        let source_id = source_id.clone();
-        let server = server.clone();
-        let docker_config = docker_config.clone();
-        tokio::spawn(async move {
-            let mut backoff = Backoff::default();
+    fn source_type() -> SourceType {
+        SourceType::Docker
+    }
 
-            loop {
-                match docker_loop(&name, &source_id, &docker_config, &server).await {
-                    LoopResult::Backoff => {
-                        server.clear_source_records(&source_id).await;
-                        sleep(backoff.next()).await;
-                    }
-                    LoopResult::Retry => {
-                        backoff.reset();
+    #[instrument(fields(%source_id), skip(self, server))]
+    async fn spawn(self, source_id: SourceId, server: &Server) -> Result<SpawnHandle, Error> {
+        tracing::trace!("Adding source");
+
+        let handle = {
+            let source_id = source_id.clone();
+            let server = server.clone();
+            tokio::spawn(async move {
+                let mut backoff = Backoff::default();
+
+                loop {
+                    match docker_loop(&source_id, &self, &server).await {
+                        LoopResult::Backoff => {
+                            server.clear_source_records(&source_id).await;
+                            sleep(backoff.next()).await;
+                        }
+                        LoopResult::Retry => {
+                            backoff.reset();
+                        }
                     }
                 }
-            }
-        })
-    };
+            })
+        };
 
-    Ok(Box::new(SpawnHandle { source_id, handle }))
+        Ok(SpawnHandle { handle })
+    }
 }

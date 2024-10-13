@@ -9,7 +9,7 @@ use serde::{
 use crate::{
     api::ApiConfig,
     dns::{Fqdn, ServerConfig, Upstream},
-    sources::SourceConfig,
+    sources::SourcesConfig,
 };
 
 struct UrlVisitor;
@@ -60,7 +60,7 @@ pub(super) struct ConfigFile {
     pub server: ServerConfig,
 
     #[serde(default)]
-    pub sources: SourceConfig,
+    pub sources: SourcesConfig,
 
     #[serde(default)]
     pub zones: HashMap<Fqdn, ZoneConfig>,

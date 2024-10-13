@@ -10,7 +10,7 @@ use crate::{
     api::ApiConfig,
     dns::{Fqdn, ServerConfig, Upstream},
     error::Error,
-    sources::SourceConfig,
+    sources::SourcesConfig,
 };
 
 mod file;
@@ -135,7 +135,7 @@ fn map_env(key: &UncasedStr) -> Uncased<'_> {
 pub(crate) struct Config {
     pub server: ServerConfig,
     pub api: Option<ApiConfig>,
-    pub sources: SourceConfig,
+    pub sources: SourcesConfig,
     zones: Zones,
 }
 

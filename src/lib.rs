@@ -10,73 +10,28 @@ mod watcher;
 
 use std::{
     collections::HashMap,
+    mem,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use chrono::{DateTime, Utc};
 pub use error::Error;
-use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock};
+use uuid::Uuid;
 
 use crate::{
     api::ApiServer,
     config::Config,
     dns::{DnsServer, RecordSet, ServerState},
-    sources::Sources,
+    sources::{SourceId, SourceRecords, Sources},
     watcher::{watch, WatchListener, Watcher},
 };
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct UniqueId {
-    id: String,
-}
-
-impl UniqueId {
-    fn random() -> Self {
-        let input_data = [0_u8; 32];
-
-        let digest = Sha256::digest(input_data);
-
-        UniqueId {
-            id: hex::encode(digest),
-        }
-    }
-
-    fn extend(&self, id: &str) -> Self {
-        let mut digest = Sha256::new();
-        digest.update(&self.id);
-        digest.update(id);
-
-        UniqueId {
-            id: hex::encode(digest.finalize()),
-        }
-    }
-}
-
-struct SourceRecords {
-    source_id: UniqueId,
-    timestamp: DateTime<Utc>,
-    records: RecordSet,
-}
-
-impl SourceRecords {
-    pub(crate) fn new(
-        source_id: &UniqueId,
-        timestamp: Option<DateTime<Utc>>,
-        records: RecordSet,
-    ) -> Self {
-        Self {
-            source_id: source_id.clone(),
-            timestamp: timestamp.unwrap_or_else(Utc::now),
-            records,
-        }
-    }
-}
+pub(crate) type ServerId = Uuid;
 
 struct ServerInner {
     config: Config,
-    records: HashMap<UniqueId, SourceRecords>,
+    records: HashMap<SourceId, SourceRecords>,
 }
 
 impl ServerInner {
@@ -120,7 +75,7 @@ impl<T> LockedOption<T> {
 
 #[derive(Clone)]
 pub struct Server {
-    id: UniqueId,
+    id: ServerId,
     inner: Arc<Mutex<ServerInner>>,
     sources: Arc<Mutex<Sources>>,
     server_state: Arc<RwLock<ServerState>>,
@@ -155,7 +110,7 @@ impl Server {
         }));
 
         let server = Self {
-            id: UniqueId::random(),
+            id: ServerId::new_v4(),
             inner: Arc::new(Mutex::new(ServerInner {
                 config: config.clone(),
                 records: HashMap::new(),
@@ -177,7 +132,7 @@ impl Server {
 
         {
             let mut sources = server.sources.lock().await;
-            sources.install_sources(&server, &config).await;
+            sources.install_sources(&server, config, None).await;
         }
 
         match watch(
@@ -228,7 +183,7 @@ impl Server {
         }
     }
 
-    pub(crate) async fn clear_source_records(&self, source_id: &UniqueId) {
+    pub(crate) async fn clear_source_records(&self, source_id: &SourceId) {
         let mut inner = self.inner.lock().await;
 
         if let Some(old) = inner.records.remove(source_id) {
@@ -261,21 +216,25 @@ impl Server {
     }
 
     async fn update_config(&self, config: Config) {
-        let (restart_server, restart_api_server) = {
+        let (restart_server, restart_api_server, old_config) = {
             let mut server_state = self.server_state.write().await;
             let mut inner = self.inner.lock().await;
 
             let restart_server = inner.config.server != config.server;
             let restart_api_server = inner.config.api != config.api;
-            inner.config = config.clone();
+
+            let mut old_config = config.clone();
+            mem::swap(&mut inner.config, &mut old_config);
             server_state.config = config.clone();
 
-            (restart_server, restart_api_server)
+            (restart_server, restart_api_server, old_config)
         };
 
         {
             let mut sources = self.sources.lock().await;
-            sources.install_sources(self, &config).await;
+            sources
+                .install_sources(self, config.clone(), Some(&old_config))
+                .await;
         }
 
         if restart_server {

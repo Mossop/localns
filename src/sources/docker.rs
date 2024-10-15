@@ -12,14 +12,11 @@ use serde::Deserialize;
 use tokio::time::sleep;
 use tracing::instrument;
 
+use crate::dns::{RData, Record, RecordSet};
 use crate::{
     backoff::Backoff,
     sources::{SourceConfig, SourceId, SourceType, SpawnHandle},
-    SourceRecords,
-};
-use crate::{
-    dns::{RData, Record, RecordSet},
-    Server,
+    RecordServer, SourceRecords,
 };
 use crate::{util::Address, Error};
 
@@ -322,10 +319,10 @@ enum LoopResult {
     Retry,
 }
 
-async fn docker_loop(
+async fn docker_loop<S: RecordServer>(
     source_id: &SourceId,
     docker_config: &DockerConfig,
-    server: &Server,
+    server: &S,
 ) -> LoopResult {
     let docker = match connect(source_id, docker_config) {
         Ok(docker) => docker,
@@ -400,7 +397,11 @@ impl SourceConfig for DockerConfig {
     }
 
     #[instrument(fields(%source_id), skip(self, server))]
-    async fn spawn(self, source_id: SourceId, server: &Server) -> Result<SpawnHandle, Error> {
+    async fn spawn<S: RecordServer>(
+        self,
+        source_id: SourceId,
+        server: &S,
+    ) -> Result<SpawnHandle, Error> {
         tracing::trace!("Adding source");
 
         let handle = {

@@ -11,7 +11,7 @@ use crate::{
     dns::{Fqdn, RDataConfig, Record, RecordSet},
     sources::{SourceConfig, SourceId, SourceType, WatcherHandle},
     watcher::{watch, FileEvent, WatchListener},
-    Error, Server, SourceRecords,
+    Error, RecordServer, SourceRecords,
 };
 
 pub(crate) type FileConfig = RelativePathBuf;
@@ -34,13 +34,13 @@ fn parse_file(source_id: &SourceId, lease_file: &Path) -> Result<RecordSet, Erro
     Ok(records)
 }
 
-struct SourceWatcher {
+struct SourceWatcher<S> {
     source_id: SourceId,
     lease_file: PathBuf,
-    server: Server,
+    server: S,
 }
 
-impl WatchListener for SourceWatcher {
+impl<S: RecordServer> WatchListener for SourceWatcher<S> {
     async fn event(&mut self, _: FileEvent) {
         let records = parse_file(&self.source_id, &self.lease_file).unwrap_or_default();
 
@@ -58,7 +58,11 @@ impl SourceConfig for FileConfig {
     }
 
     #[instrument(fields(%source_id), skip(self, server))]
-    async fn spawn(self, source_id: SourceId, server: &Server) -> Result<WatcherHandle, Error> {
+    async fn spawn<S: RecordServer>(
+        self,
+        source_id: SourceId,
+        server: &S,
+    ) -> Result<WatcherHandle, Error> {
         tracing::trace!("Adding source");
         let lease_file = self.relative();
 

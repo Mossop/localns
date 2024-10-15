@@ -5,11 +5,14 @@ mod config;
 mod dns;
 mod error;
 mod sources;
+#[cfg(test)]
+mod test;
 mod util;
 mod watcher;
 
 use std::{
     collections::HashMap,
+    future::Future,
     mem,
     path::{Path, PathBuf},
     sync::Arc,
@@ -71,6 +74,15 @@ impl<T> LockedOption<T> {
     async fn replace(&self, value: T) -> Option<T> {
         self.inner.lock().await.replace(value)
     }
+}
+
+pub(crate) trait RecordServer
+where
+    Self: Send + Sync + Clone + 'static,
+{
+    fn add_source_records(&self, new_records: SourceRecords) -> impl Future<Output = ()> + Send;
+
+    fn clear_source_records(&self, source_id: &SourceId) -> impl Future<Output = ()> + Send;
 }
 
 #[derive(Clone)]
@@ -153,48 +165,6 @@ impl Server {
         Ok(server)
     }
 
-    pub(crate) async fn add_source_records(&self, new_records: SourceRecords) {
-        let mut inner = self.inner.lock().await;
-
-        let mut changed = true;
-        inner
-            .records
-            .entry(new_records.source_id.clone())
-            .and_modify(|current| {
-                if new_records.timestamp < current.timestamp {
-                    changed = false;
-                    return;
-                }
-
-                current.timestamp = new_records.timestamp;
-                if new_records.records == current.records {
-                    changed = false;
-                    return;
-                }
-
-                current.records = new_records.records.clone();
-            })
-            .or_insert(new_records);
-
-        if changed {
-            let records = inner.records();
-            let mut server_state = self.server_state.write().await;
-            server_state.records = records;
-        }
-    }
-
-    pub(crate) async fn clear_source_records(&self, source_id: &SourceId) {
-        let mut inner = self.inner.lock().await;
-
-        if let Some(old) = inner.records.remove(source_id) {
-            if !old.records.is_empty() {
-                let records = inner.records();
-                let mut server_state = self.server_state.write().await;
-                server_state.records = records;
-            }
-        }
-    }
-
     pub async fn shutdown(&self) {
         tracing::info!("Server shutting down");
 
@@ -253,6 +223,50 @@ impl Server {
                 .and_then(|api_config| ApiServer::new(api_config, self.clone()))
             {
                 self.api_server.replace(api_server).await;
+            }
+        }
+    }
+}
+
+impl RecordServer for Server {
+    async fn add_source_records(&self, new_records: SourceRecords) {
+        let mut inner = self.inner.lock().await;
+
+        let mut changed = true;
+        inner
+            .records
+            .entry(new_records.source_id.clone())
+            .and_modify(|current| {
+                if new_records.timestamp < current.timestamp {
+                    changed = false;
+                    return;
+                }
+
+                current.timestamp = new_records.timestamp;
+                if new_records.records == current.records {
+                    changed = false;
+                    return;
+                }
+
+                current.records = new_records.records.clone();
+            })
+            .or_insert(new_records);
+
+        if changed {
+            let records = inner.records();
+            let mut server_state = self.server_state.write().await;
+            server_state.records = records;
+        }
+    }
+
+    async fn clear_source_records(&self, source_id: &SourceId) {
+        let mut inner = self.inner.lock().await;
+
+        if let Some(old) = inner.records.remove(source_id) {
+            if !old.records.is_empty() {
+                let records = inner.records();
+                let mut server_state = self.server_state.write().await;
+                server_state.records = records;
             }
         }
     }

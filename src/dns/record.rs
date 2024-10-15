@@ -3,7 +3,7 @@ use std::{
         hash_map::{IntoValues, Values},
         HashMap, HashSet,
     },
-    fmt::{self, Display},
+    fmt::{self},
     hash::Hash,
     iter::{empty, once, Flatten},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -130,7 +130,7 @@ impl From<RDataConfig> for RData {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(from = "String")]
 #[serde(into = "String")]
 pub enum Fqdn {
@@ -200,7 +200,16 @@ impl Fqdn {
     }
 }
 
-impl Display for Fqdn {
+impl fmt::Debug for Fqdn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Fqdn::Valid(n) => write!(f, "{n}"),
+            Fqdn::Invalid(s) => write!(f, "INVALID({s})"),
+        }
+    }
+}
+
+impl fmt::Display for Fqdn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Fqdn::Valid(name) => f.pad(&name.to_string()),
@@ -277,7 +286,7 @@ fn remote_source() -> RecordSource {
     RecordSource::Remote
 }
 
-#[derive(Debug, PartialEq, Hash, Eq, Clone, Deserialize, Serialize)]
+#[derive(PartialEq, Hash, Eq, Clone, Deserialize, Serialize)]
 pub struct Record {
     name: Fqdn,
     #[serde(skip)]
@@ -285,6 +294,22 @@ pub struct Record {
     pub source: RecordSource,
     pub ttl: Option<u32>,
     rdata: RData,
+}
+
+impl fmt::Debug for Record {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ttl = if let Some(ttl) = self.ttl {
+            ttl.to_string()
+        } else {
+            "no expiry".to_string()
+        };
+
+        write!(
+            f,
+            "{} -> {:?} ({:?}, {})",
+            self.name, self.rdata, self.source, ttl
+        )
+    }
 }
 
 impl Record {
@@ -327,7 +352,7 @@ impl Record {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Clone, Deserialize, Serialize)]
+#[derive(Default, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(from = "Vec<Record>")]
 #[serde(into = "Vec<Record>")]
 pub struct RecordSet {
@@ -336,9 +361,58 @@ pub struct RecordSet {
     names: HashSet<Name>,
 }
 
+impl fmt::Debug for RecordSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let records: Vec<&Record> = self.records().collect();
+        let reverse: HashMap<&IpAddr, String> = self
+            .reverse
+            .iter()
+            .map(|(ip, record)| {
+                if let RData::Ptr(p) = &record.rdata {
+                    (ip, p.to_string())
+                } else {
+                    unreachable!()
+                }
+            })
+            .collect();
+
+        f.debug_struct("RecordSet")
+            .field("records", &records)
+            .field("reverse", &reverse)
+            .finish()
+    }
+}
+
 impl RecordSet {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    #[cfg(test)]
+    pub fn contains(&self, name: &Fqdn, rdata: &RData) -> bool {
+        self.records
+            .get(name)
+            .map(|records| records.iter().any(|r| r.rdata == *rdata))
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub fn doesnt_contain(&self, name: &Fqdn) -> bool {
+        !self.records.contains_key(name)
+    }
+
+    #[cfg(test)]
+    pub fn contains_reverse<I: Into<IpAddr>>(&self, ip: I, name: &Fqdn) -> bool {
+        self.reverse
+            .get(&ip.into())
+            .map(|r| {
+                if let RData::Ptr(p) = &r.rdata {
+                    p == name
+                } else {
+                    false
+                }
+            })
+            .unwrap_or_default()
     }
 
     pub fn has_name(&self, name: &Name) -> bool {
@@ -499,5 +573,18 @@ impl From<Vec<Record>> for RecordSet {
 impl From<RecordSet> for Vec<Record> {
     fn from(records: RecordSet) -> Vec<Record> {
         records.into_iter().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::dns::Fqdn;
+
+    #[test]
+    fn fqdn() {
+        assert_eq!(
+            Fqdn::from("test.example.com."),
+            Fqdn::from("test.example.com")
+        );
     }
 }

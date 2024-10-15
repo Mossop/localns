@@ -10,7 +10,7 @@ use crate::{
     config::deserialize_url,
     dns::RecordSet,
     sources::{SourceConfig, SourceId, SourceType, SpawnHandle},
-    Error, Server, SourceRecords,
+    Error, RecordServer, SourceRecords,
 };
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
@@ -54,11 +54,11 @@ where
     }
 }
 
-async fn remote_loop(
+async fn remote_loop<S: RecordServer>(
     source_id: &SourceId,
     remote_config: &RemoteConfig,
     client: &Client,
-    server: &Server,
+    server: &S,
 ) -> LoopResult {
     tracing::trace!(
         %source_id,
@@ -100,7 +100,11 @@ impl SourceConfig for RemoteConfig {
     }
 
     #[instrument(fields(%source_id), skip(self, server))]
-    async fn spawn(self, source_id: SourceId, server: &Server) -> Result<SpawnHandle, Error> {
+    async fn spawn<S: RecordServer>(
+        self,
+        source_id: SourceId,
+        server: &S,
+    ) -> Result<SpawnHandle, Error> {
         tracing::trace!("Adding source");
 
         let handle = {

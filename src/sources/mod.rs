@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_plain::derive_display_from_serialize;
 use tokio::task::JoinHandle;
 
-use crate::{config::Config, dns::RecordSet, watcher::Watcher, Error, Server, ServerId};
+use crate::{
+    config::Config, dns::RecordSet, watcher::Watcher, Error, RecordServer, Server, ServerId,
+};
 
 mod dhcp;
 mod docker;
@@ -21,7 +23,11 @@ trait SourceConfig: PartialEq {
 
     fn source_type() -> SourceType;
 
-    async fn spawn(self, source_id: SourceId, server: &Server) -> Result<Self::Handle, Error>;
+    async fn spawn<S: RecordServer>(
+        self,
+        source_id: SourceId,
+        server: &S,
+    ) -> Result<Self::Handle, Error>;
 }
 
 pub(crate) trait SourceHandle
@@ -48,7 +54,7 @@ struct WatcherHandle {
 
 impl SourceHandle for WatcherHandle {}
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename = "lowercase")]
 pub(crate) enum SourceType {
     File,
@@ -60,7 +66,7 @@ pub(crate) enum SourceType {
 
 derive_display_from_serialize!(SourceType);
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub(crate) struct SourceId {
     server_id: ServerId,
     source_type: SourceType,

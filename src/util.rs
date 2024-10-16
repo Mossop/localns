@@ -83,17 +83,20 @@ impl From<IpAddr> for Host {
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Hash)]
 #[serde(from = "String")]
-pub struct Address {
+pub(crate) struct Address {
     pub host: Host,
     pub port: Option<u16>,
 }
 
 impl Address {
-    pub fn address(&self, default_port: u16) -> String {
+    pub(crate) fn address(&self, default_port: u16) -> String {
         format!("{}:{}", self.host, self.port.unwrap_or(default_port))
     }
 
-    pub fn to_socket_address(&self, default_port: u16) -> Result<SocketAddr, AddrParseError> {
+    pub(crate) fn to_socket_address(
+        &self,
+        default_port: u16,
+    ) -> Result<SocketAddr, AddrParseError> {
         SocketAddr::from_str(&format!(
             "{}:{}",
             self.host,

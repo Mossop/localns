@@ -6,6 +6,7 @@ use hickory_server::{
     server::{Request, RequestHandler, ResponseHandler, ResponseInfo},
 };
 use tokio::sync::RwLock;
+use tracing::instrument;
 
 use crate::dns::ServerState;
 
@@ -31,6 +32,13 @@ impl Handler {
 
 #[async_trait::async_trait]
 impl RequestHandler for Handler {
+    #[instrument(fields(
+        request.id = request.id(),
+        request.protocol = %request.request_info().protocol,
+        request.source_address = %request.request_info().src.ip(),
+        request.source_port = %request.request_info().src.port(),
+        request.qflags = request.header().flags().to_string(),
+    ), skip_all)]
     async fn handle_request<R: ResponseHandler>(
         &self,
         request: &Request,
@@ -76,9 +84,11 @@ impl RequestHandler for Handler {
         let result = match request.message_type() {
             MessageType::Query => match request.op_code() {
                 OpCode::Query => {
-                    let server = self.server_state().await;
-                    let mut context = QueryContext::new(request);
-                    context.perform_query(&server).await;
+                    let server_state = self.server_state().await;
+                    let mut context = QueryContext::new(server_state.records, server_state.zones);
+                    context
+                        .perform_query(request.query().original(), request.recursion_desired())
+                        .await;
 
                     response_handle
                         .send_response(builder.build(
@@ -98,7 +108,7 @@ impl RequestHandler for Handler {
                 }
             },
             MessageType::Response => {
-                tracing::warn!(id = request.id(), "Got a response as a request from id");
+                tracing::warn!("Got a response as a request from id");
                 response_handle
                     .send_response(builder.error_msg(request.header(), ResponseCode::FormErr))
                     .await

@@ -340,7 +340,7 @@ impl Record {
         self.name.is_valid() && self.rdata.is_valid()
     }
 
-    pub fn raw(&self, config: &ZoneConfig) -> Option<rr::Record> {
+    pub(crate) fn raw(&self, config: &ZoneConfig) -> Option<rr::Record> {
         let name = self.name().name()?;
         let data: rr::RData = self.rdata.clone().try_into().ok()?;
 

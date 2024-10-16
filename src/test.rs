@@ -1,5 +1,6 @@
-use std::{ops::Deref, sync::Arc, time::Duration};
+use std::{ops::Deref, str::FromStr, sync::Arc, time::Duration};
 
+use hickory_server::proto::rr::domain::Name;
 use tokio::{
     sync::{Mutex, Notify},
     time::timeout,
@@ -73,4 +74,8 @@ impl RecordServer for TestServer {
         self.notify.notify_waiters();
         inner.take();
     }
+}
+
+pub(crate) fn name(n: &str) -> Name {
+    Name::from_str(n).unwrap()
 }

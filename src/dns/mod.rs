@@ -12,7 +12,7 @@ mod record;
 mod server;
 mod upstream;
 
-use crate::config::Config;
+use crate::config::Zones;
 
 use self::handler::Handler;
 
@@ -28,7 +28,7 @@ pub(crate) struct ServerConfig {
 #[derive(Debug, Clone)]
 pub(crate) struct ServerState {
     pub(crate) records: RecordSet,
-    pub(crate) config: Config,
+    pub(crate) zones: Zones,
 }
 
 pub(crate) struct DnsServer {
@@ -37,10 +37,13 @@ pub(crate) struct DnsServer {
 }
 
 impl DnsServer {
-    pub(crate) async fn new(server_state: Arc<RwLock<ServerState>>) -> Self {
+    pub(crate) async fn new(
+        server_config: &ServerConfig,
+        server_state: Arc<RwLock<ServerState>>,
+    ) -> Self {
         Self {
             server_state: server_state.clone(),
-            server: Self::build_server(server_state).await,
+            server: Self::build_server(server_config, server_state).await,
         }
     }
 
@@ -52,19 +55,20 @@ impl DnsServer {
         }
     }
 
-    pub(crate) async fn restart(&mut self) {
+    pub(crate) async fn restart(&mut self, server_config: &ServerConfig) {
         tracing::debug!("Restarting DNS service");
 
         if let Err(e) = self.server.block_until_done().await {
             tracing::error!(error = %e, "Failure while shutting down DNS server.");
         }
 
-        self.server = Self::build_server(self.server_state.clone()).await;
+        self.server = Self::build_server(server_config, self.server_state.clone()).await;
     }
 
-    async fn build_server(server_state: Arc<RwLock<ServerState>>) -> ServerFuture<Handler> {
-        let server_config = server_state.read().await.config.server.clone();
-
+    async fn build_server(
+        server_config: &ServerConfig,
+        server_state: Arc<RwLock<ServerState>>,
+    ) -> ServerFuture<Handler> {
         let handler = Handler { server_state };
 
         let port = server_config.port.unwrap_or(53);

@@ -1,17 +1,17 @@
-use std::{fmt, net::SocketAddr, time::Instant};
+use std::{fmt, net::SocketAddr};
 
 use hickory_client::{
     client::AsyncClient,
     client::ClientHandle,
-    op::{DnsResponse, ResponseCode},
+    op::DnsResponse,
     rr::{DNSClass, Name, RecordType},
     udp::UdpClientStream,
 };
 use serde::Deserialize;
 use tokio::net::UdpSocket;
-use tracing::Level;
+use tracing::{instrument, Span};
 
-use crate::{event_lvl, util::Address, Error};
+use crate::{util::Address, Error};
 
 pub(crate) type UpstreamConfig = Address;
 
@@ -27,7 +27,7 @@ async fn connect_client(address: SocketAddr) -> Result<AsyncClient, Error> {
 
 #[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(from = "UpstreamConfig")]
-pub struct Upstream {
+pub(crate) struct Upstream {
     config: UpstreamConfig,
 }
 
@@ -44,21 +44,19 @@ impl From<UpstreamConfig> for Upstream {
 }
 
 impl Upstream {
-    pub fn new(config: &UpstreamConfig) -> Self {
-        Self {
-            config: config.clone(),
-        }
-    }
-
-    pub async fn lookup(
+    #[instrument(fields(
+        lookup.upstream = %self.config,
+        lookup.name = %name,
+        lookup.query_class = %query_class,
+        lookup.query_type = %query_type,
+        lookup.response_code,
+    ), skip_all)]
+    pub(crate) async fn lookup(
         &self,
-        id: u16,
         name: &Name,
         query_class: DNSClass,
         query_type: RecordType,
     ) -> Option<DnsResponse> {
-        let start = Instant::now();
-
         let address = match self.config.to_socket_address(53) {
             Ok(addr) => addr,
             Err(e) => {
@@ -75,30 +73,12 @@ impl Upstream {
             }
         };
 
-        match client.query(name.clone(), query_class, query_type).await {
+        let result = client.query(name.clone(), query_class, query_type).await;
+
+        match result {
             Ok(response) => {
-                let level = match response.response_code() {
-                    ResponseCode::NoError | ResponseCode::NXDomain => Level::TRACE,
-                    _ => Level::WARN,
-                };
-
-                let duration = Instant::now() - start;
-                event_lvl!(
-                    level,
-                    id = id,
-                    upstream = address.to_string(),
-                    query = name.to_string(),
-                    qtype = query_type.to_string(),
-                    class = query_class.to_string(),
-                    response_code = response.response_code().to_string(),
-                    answers = response.answer_count(),
-                    authorities = response.name_server_count(),
-                    additionals = response.additional_count(),
-                    rflags = response.flags().to_string(),
-                    duration_ms = duration.as_millis(),
-                    "Upstream request"
-                );
-
+                let span = Span::current();
+                span.record("lookup.response_code", response.response_code().to_string());
                 Some(response)
             }
             Err(e) => {

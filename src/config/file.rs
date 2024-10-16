@@ -37,31 +37,37 @@ where
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-pub(super) struct ZoneConfig {
+pub(super) struct DefaultZoneConfig {
     #[serde(default)]
-    pub upstream: Option<Upstream>,
+    pub(super) upstream: Option<Upstream>,
 
     #[serde(default)]
-    pub ttl: Option<u32>,
+    pub(super) ttl: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub(super) struct PartialZoneConfig {
+    #[serde(flatten)]
+    pub(super) config: DefaultZoneConfig,
 
     #[serde(default)]
-    pub authoritative: Option<bool>,
+    pub(super) authoritative: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ConfigFile {
     #[serde(default)]
-    pub defaults: ZoneConfig,
+    pub(super) defaults: DefaultZoneConfig,
 
     #[serde(default)]
-    pub api: Option<ApiConfig>,
+    pub(super) api: Option<ApiConfig>,
 
     #[serde(default)]
-    pub server: ServerConfig,
+    pub(super) server: ServerConfig,
 
     #[serde(default)]
-    pub sources: SourcesConfig,
+    pub(super) sources: SourcesConfig,
 
     #[serde(default)]
-    pub zones: HashMap<Fqdn, ZoneConfig>,
+    pub(super) zones: HashMap<Fqdn, PartialZoneConfig>,
 }

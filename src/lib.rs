@@ -117,7 +117,7 @@ impl Server {
         let config = Config::from_file(config_path)?;
 
         let server_state = Arc::new(RwLock::new(ServerState {
-            config: config.clone(),
+            zones: config.zones.clone(),
             records: RecordSet::new(),
         }));
 
@@ -128,7 +128,9 @@ impl Server {
                 records: HashMap::new(),
             })),
             sources: Default::default(),
-            dns_server: Arc::new(Mutex::new(DnsServer::new(server_state.clone()).await)),
+            dns_server: Arc::new(Mutex::new(
+                DnsServer::new(&config.server, server_state.clone()).await,
+            )),
             server_state,
             config_watcher: Default::default(),
             api_server: Default::default(),
@@ -195,7 +197,7 @@ impl Server {
 
             let mut old_config = config.clone();
             mem::swap(&mut inner.config, &mut old_config);
-            server_state.config = config.clone();
+            server_state.zones = config.zones.clone();
 
             (restart_server, restart_api_server, old_config)
         };
@@ -209,7 +211,7 @@ impl Server {
 
         if restart_server {
             let mut dns_server = self.dns_server.lock().await;
-            dns_server.restart().await;
+            dns_server.restart(&config.server).await;
         }
 
         if restart_api_server {

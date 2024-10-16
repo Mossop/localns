@@ -17,15 +17,26 @@ mod file;
 
 pub(crate) use file::deserialize_url;
 
-pub struct ZoneConfig {
-    origin: Option<Fqdn>,
-    pub upstream: Option<Upstream>,
-    pub ttl: u32,
-    authoritative: bool,
+pub(crate) struct ZoneConfig {
+    pub(crate) origin: Option<Fqdn>,
+    pub(crate) upstream: Option<Upstream>,
+    pub(crate) ttl: u32,
+    pub(crate) authoritative: bool,
 }
 
-impl ZoneConfig {
-    fn new(defaults: &file::ZoneConfig) -> Self {
+impl Default for ZoneConfig {
+    fn default() -> Self {
+        Self {
+            origin: None,
+            upstream: None,
+            ttl: 300,
+            authoritative: false,
+        }
+    }
+}
+
+impl From<&file::DefaultZoneConfig> for ZoneConfig {
+    fn from(defaults: &file::DefaultZoneConfig) -> Self {
         Self {
             origin: None,
             upstream: defaults.upstream.clone(),
@@ -33,8 +44,10 @@ impl ZoneConfig {
             authoritative: false,
         }
     }
+}
 
-    pub fn soa(&self) -> Option<rr::Record> {
+impl ZoneConfig {
+    pub(crate) fn soa(&self) -> Option<rr::Record> {
         if !self.authoritative {
             return None;
         }
@@ -56,13 +69,13 @@ impl ZoneConfig {
         ))
     }
 
-    fn apply_config(&mut self, origin: Fqdn, config: &file::ZoneConfig) {
+    fn apply_config(&mut self, origin: Fqdn, config: &file::PartialZoneConfig) {
         self.origin = Some(origin);
 
-        if let Some(ref upstream) = config.upstream {
+        if let Some(ref upstream) = config.config.upstream {
             self.upstream = Some(upstream.clone());
         }
-        if let Some(ttl) = config.ttl {
+        if let Some(ttl) = config.config.ttl {
             self.ttl = ttl;
         }
         self.authoritative = config.authoritative.unwrap_or(true);
@@ -88,21 +101,30 @@ impl fmt::Debug for ZoneConfig {
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
-struct Zones {
-    pub defaults: file::ZoneConfig,
-    pub zones: Vec<(Fqdn, file::ZoneConfig)>,
+pub(crate) struct Zones {
+    defaults: file::DefaultZoneConfig,
+    zones: Vec<(Fqdn, file::PartialZoneConfig)>,
 }
 
 impl Zones {
-    fn new(defaults: file::ZoneConfig, mut zones: HashMap<Fqdn, file::ZoneConfig>) -> Self {
-        let mut zones: Vec<(Fqdn, file::ZoneConfig)> = zones.drain().collect();
+    fn new(
+        defaults: file::DefaultZoneConfig,
+        mut zones: HashMap<Fqdn, file::PartialZoneConfig>,
+    ) -> Self {
+        let mut zones: Vec<(Fqdn, file::PartialZoneConfig)> = zones.drain().collect();
         zones.sort_by(|(n1, _), (n2, _)| n1.cmp(n2));
 
         Self { defaults, zones }
     }
+}
 
-    fn build_config(&self, name: &Fqdn) -> ZoneConfig {
-        let mut config = ZoneConfig::new(&self.defaults);
+pub(crate) trait ZoneConfigProvider {
+    fn zone_config(&self, fqdn: &Fqdn) -> ZoneConfig;
+}
+
+impl ZoneConfigProvider for Zones {
+    fn zone_config(&self, name: &Fqdn) -> ZoneConfig {
+        let mut config = ZoneConfig::from(&self.defaults);
 
         for (n, c) in &self.zones {
             if n.is_parent(name) {
@@ -136,7 +158,7 @@ pub(crate) struct Config {
     pub server: ServerConfig,
     pub api: Option<ApiConfig>,
     pub sources: SourcesConfig,
-    zones: Zones,
+    pub(crate) zones: Zones,
 }
 
 impl Config {
@@ -154,9 +176,5 @@ impl Config {
             sources: config.sources,
             zones: Zones::new(config.defaults, config.zones),
         })
-    }
-
-    pub(crate) fn zone_config(&self, name: &Fqdn) -> ZoneConfig {
-        self.zones.build_config(name)
     }
 }

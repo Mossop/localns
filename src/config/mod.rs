@@ -9,8 +9,8 @@ use std::{collections::HashMap, fmt, path::Path};
 use crate::{
     api::ApiConfig,
     dns::{Fqdn, ServerConfig, Upstream},
-    error::Error,
     sources::SourcesConfig,
+    Error,
 };
 
 mod file;

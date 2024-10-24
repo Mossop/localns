@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use anyhow::bail;
 use reqwest::{Client, Url};
 use serde::{de::DeserializeOwned, Deserialize};
 use tokio::time::sleep;
@@ -79,6 +80,7 @@ fn parse_hosts(rule: &str) -> Result<Vec<Fqdn>, Error> {
     Ok(hosts)
 }
 
+#[instrument]
 fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, Error> {
     #[derive(Debug, PartialEq, Eq)]
     enum State {
@@ -102,10 +104,7 @@ fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, Error> {
             (State::Pre, '`') => State::Backtick("".into()),
             (State::Pre, '"') => State::Quote("".into()),
             (State::Pre, ch) => {
-                return Err(Error::TraefikRuleError {
-                    rule: rule.to_owned(),
-                    message: format!("Unexpected character '{}' when expecting a string", ch),
-                })
+                bail!("Unexpected character '{}' when expecting a string", ch);
             }
 
             (State::Backtick(st), '`') => {
@@ -123,22 +122,16 @@ fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, Error> {
 
             (State::EscapedQuote(st), '"') => State::Quote(format!("{}\"", st)),
             (State::EscapedQuote(_), ch) => {
-                return Err(Error::TraefikRuleError {
-                    rule: rule.to_owned(),
-                    message: format!("Unexpected character '{}' when a control character", ch),
-                })
+                bail!("Unexpected character '{}' when a control character", ch);
             }
 
             (State::Post, ' ' | '\t') => State::Post,
             (State::Post, ',') => State::Pre,
             (State::Post, ch) => {
-                return Err(Error::TraefikRuleError {
-                    rule: rule.to_owned(),
-                    message: format!(
-                        "Unexpected character '{}' when expecting a comma or the end of the rule",
-                        ch
-                    ),
-                })
+                bail!(
+                    "Unexpected character '{}' when expecting a comma or the end of the rule",
+                    ch
+                );
             }
         }
     }
@@ -146,10 +139,7 @@ fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, Error> {
     if state == State::Post || state == State::Pre {
         Ok(hosts)
     } else {
-        Err(Error::TraefikRuleError {
-            rule: rule.to_owned(),
-            message: format!("Unexpected end of rule (in state {:?})", state),
-        })
+        bail!("Unexpected end of rule (in state {:?})", state);
     }
 }
 

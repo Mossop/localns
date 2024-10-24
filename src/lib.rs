@@ -3,7 +3,6 @@ mod api;
 mod backoff;
 mod config;
 mod dns;
-mod error;
 mod sources;
 #[cfg(test)]
 mod test;
@@ -18,7 +17,7 @@ use std::{
     sync::Arc,
 };
 
-pub use error::Error;
+pub use anyhow::Error;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 

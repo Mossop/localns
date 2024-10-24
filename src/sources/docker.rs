@@ -4,6 +4,7 @@ use std::net::Ipv4Addr;
 use std::path::Path;
 use std::str::FromStr;
 
+use anyhow::{bail, Context};
 use bollard::models;
 use bollard::{Docker, API_DEFAULT_VERSION};
 use figment::value::magic::RelativePathBuf;
@@ -73,14 +74,8 @@ impl ContainerEndpoint {
         state: models::EndpointSettings,
         networks: &HashMap<String, Network>,
     ) -> Result<Self, Error> {
-        let network_id = state.network_id.ok_or_else(|| Error::DockerApiError {
-            message: "Missing network id".to_string(),
-        })?;
-        let network = networks
-            .get(&network_id)
-            .ok_or_else(|| Error::DockerApiError {
-                message: "Unknown network".to_string(),
-            })?;
+        let network_id = state.network_id.context("Missing network id")?;
+        let network = networks.get(&network_id).context("Unknown network")?;
 
         Ok(ContainerEndpoint {
             network: network.clone(),
@@ -116,9 +111,7 @@ impl Container {
         };
 
         Ok(Container {
-            id: state.id.ok_or_else(|| Error::DockerApiError {
-                message: "Missing id".to_string(),
-            })?,
+            id: state.id.context("Missing id")?,
             image: state.image,
             names: state.names.unwrap_or_default(),
             networks: container_networks,
@@ -139,9 +132,7 @@ fn check_file(file: &Path) -> Result<(), Error> {
     let metadata = fs::metadata(file)?;
 
     if !metadata.is_file() {
-        Err(Error::FileTypeError {
-            file: file.to_owned(),
-        })
+        bail!("Invalid file: '{}'", file.display());
     } else {
         Ok(())
     }

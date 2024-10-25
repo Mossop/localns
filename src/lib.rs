@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::{
     api::ApiServer,
-    config::Config,
+    config::{Config, Zones},
     dns::{DnsServer, RecordSet, ServerState},
     sources::{SourceId, SourceRecords, Sources},
     watcher::{watch, WatchListener, Watcher},
@@ -89,7 +89,7 @@ pub struct Server {
     id: ServerId,
     inner: Arc<Mutex<ServerInner>>,
     sources: Arc<Mutex<Sources>>,
-    server_state: Arc<RwLock<ServerState>>,
+    server_state: Arc<RwLock<ServerState<Zones>>>,
     dns_server: Arc<Mutex<DnsServer>>,
     config_watcher: LockedOption<Watcher>,
     api_server: LockedOption<ApiServer>,

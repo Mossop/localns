@@ -1,19 +1,18 @@
 use std::{fmt, net::SocketAddr};
 
 use hickory_client::{
-    client::AsyncClient,
-    client::ClientHandle,
+    client::{AsyncClient, ClientHandle},
     op::DnsResponse,
-    rr::{DNSClass, Name, RecordType},
+    rr::{self, DNSClass, Name, RecordType},
     udp::UdpClientStream,
 };
 use serde::Deserialize;
 use tokio::net::UdpSocket;
 use tracing::{instrument, Span};
 
-use crate::{util::Address, Error};
+use crate::{dns::query::QueryState, util::Address, Error};
 
-pub(crate) type UpstreamConfig = Address;
+type UpstreamConfig = Address;
 
 async fn connect_client(address: SocketAddr) -> Result<AsyncClient, Error> {
     let stream = UdpClientStream::<UdpSocket>::new(address);
@@ -51,7 +50,7 @@ impl Upstream {
         lookup.query_type = %query_type,
         lookup.response_code,
     ), skip_all)]
-    pub(crate) async fn lookup(
+    async fn lookup(
         &self,
         name: &Name,
         query_class: DNSClass,
@@ -86,5 +85,147 @@ impl Upstream {
                 None
             }
         }
+    }
+
+    pub(super) async fn resolve(&self, name: &Name, query_state: &mut QueryState) {
+        if let Some(response) = self
+            .lookup(name, query_state.query_class(), query_state.query_type())
+            .await
+        {
+            let mut message = response.into_message();
+
+            query_state.add_answers(message.take_answers());
+            query_state.add_additionals(message.take_additionals());
+
+            if name == query_state.query.name() {
+                query_state.response_code = message.response_code();
+                query_state.recursion_available = message.recursion_available();
+
+                let mut name_servers: Vec<rr::Record> = Vec::new();
+                let mut soa: Option<rr::Record> = None;
+
+                for record in message.take_name_servers() {
+                    if record.record_type() == rr::RecordType::SOA {
+                        soa.replace(record);
+                    } else {
+                        name_servers.push(record);
+                    }
+                }
+
+                query_state.name_servers.extend(name_servers);
+                query_state.soa = soa;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use hickory_client::{
+        op::{Query, ResponseCode},
+        proto::rr::{self, rdata},
+        rr::{DNSClass, RecordType},
+    };
+    use testcontainers::core::ContainerPort;
+
+    use crate::{
+        dns::{query::QueryState, Upstream},
+        test::{coredns_container, name},
+        util::{Address, Host},
+    };
+
+    #[tokio::test]
+    async fn test_upstream() {
+        let coredns = coredns_container(
+            "example.org",
+            r#"
+$ORIGIN example.org.
+@   3600 IN	SOA sns.dns.icann.org. noc.dns.icann.org. 2024102601 7200 3600 1209600 3600
+    3600 IN NS a.iana-servers.net.
+    3600 IN NS b.iana-servers.net.
+
+www     IN A     10.10.10.5
+data    IN CNAME www
+"#,
+        )
+        .await
+        .unwrap();
+
+        let upstream = Upstream::from(Address {
+            host: Host::from("127.0.0.1"),
+            port: Some(
+                coredns
+                    .get_host_port_ipv4(ContainerPort::Udp(53))
+                    .await
+                    .unwrap(),
+            ),
+        });
+
+        let mut query_state = QueryState::new(
+            Query::query(name("unknown.example.org."), RecordType::A),
+            false,
+        );
+        upstream
+            .resolve(&name("unknown.example.org."), &mut query_state)
+            .await;
+
+        assert_eq!(query_state.response_code, ResponseCode::NXDomain);
+        assert!(query_state.answers().is_empty());
+        assert!(query_state.additionals().is_empty());
+
+        let mut query_state =
+            QueryState::new(Query::query(name("www.example.org."), RecordType::A), false);
+        upstream
+            .resolve(&name("www.example.org."), &mut query_state)
+            .await;
+
+        assert_eq!(query_state.response_code, ResponseCode::NoError);
+        assert!(query_state.additionals().is_empty());
+        let mut answers = query_state.answers().clone();
+        answers.sort();
+        assert_eq!(answers.len(), 1);
+
+        let record = answers.first().unwrap();
+        assert_eq!(*record.name(), name("www.example.org."));
+        assert_eq!(record.dns_class(), DNSClass::IN);
+        assert_eq!(record.record_type(), RecordType::A);
+        assert_eq!(
+            *record.data().unwrap(),
+            rr::RData::A(rdata::A(Ipv4Addr::new(10, 10, 10, 5)))
+        );
+
+        let mut query_state = QueryState::new(
+            Query::query(name("data.example.org."), RecordType::A),
+            false,
+        );
+        upstream
+            .resolve(&name("data.example.org."), &mut query_state)
+            .await;
+
+        assert_eq!(query_state.response_code, ResponseCode::NoError);
+        assert!(query_state.additionals().is_empty());
+        let mut answers = query_state.answers().clone();
+        answers.sort();
+        assert_eq!(answers.len(), 2);
+
+        let mut answers = answers.into_iter();
+        let record = answers.next().unwrap();
+        assert_eq!(*record.name(), name("data.example.org."));
+        assert_eq!(record.dns_class(), DNSClass::IN);
+        assert_eq!(record.record_type(), RecordType::CNAME);
+        assert_eq!(
+            *record.data().unwrap(),
+            rr::RData::CNAME(rdata::CNAME(name("www.example.org.")))
+        );
+
+        let record = answers.next().unwrap();
+        assert_eq!(*record.name(), name("www.example.org."));
+        assert_eq!(record.dns_class(), DNSClass::IN);
+        assert_eq!(
+            *record.data().unwrap(),
+            rr::RData::A(rdata::A(Ipv4Addr::new(10, 10, 10, 5)))
+        );
     }
 }

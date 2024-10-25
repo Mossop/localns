@@ -1,7 +1,16 @@
 use std::{ops::Deref, str::FromStr, sync::Arc, time::Duration};
 
+use anyhow::Error;
 use hickory_server::proto::rr::domain::Name;
+use tempfile::NamedTempFile;
+use testcontainers::{
+    core::{Mount, WaitFor},
+    runners::AsyncRunner,
+    ContainerAsync, GenericImage, ImageExt,
+};
 use tokio::{
+    fs,
+    io::AsyncWriteExt,
     sync::{Mutex, Notify},
     time::timeout,
 };
@@ -78,4 +87,33 @@ impl RecordServer for TestServer {
 
 pub(crate) fn name(n: &str) -> Name {
     Name::from_str(n).unwrap()
+}
+
+pub(crate) async fn coredns_container(
+    zone: &str,
+    zonefile: &str,
+) -> Result<ContainerAsync<GenericImage>, Error> {
+    let zone_file = NamedTempFile::new()?;
+    let config_file = NamedTempFile::new()?;
+
+    let mut file = fs::File::from_std(config_file.reopen()?);
+    file.write_all(format!("{zone} {{\n  file /zone\n}}\n").as_bytes())
+        .await?;
+
+    let mut file = fs::File::from_std(zone_file.reopen()?);
+    file.write_all(zonefile.as_bytes()).await?;
+
+    Ok(GenericImage::new("coredns/coredns", "1.11.3")
+        .with_wait_for(WaitFor::message_on_stdout("CoreDNS-1.11.3"))
+        .with_cmd(["-conf", "/Corefile"])
+        .with_mount(Mount::bind_mount(
+            zone_file.path().to_str().unwrap(),
+            "/zone",
+        ))
+        .with_mount(Mount::bind_mount(
+            config_file.path().to_str().unwrap(),
+            "/Corefile",
+        ))
+        .start()
+        .await?)
 }

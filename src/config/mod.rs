@@ -4,7 +4,11 @@ use figment::{
     Figment,
 };
 use hickory_server::{proto::rr, proto::rr::rdata::SOA};
-use std::{collections::HashMap, fmt, path::Path};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt,
+    path::Path,
+};
 
 use crate::{
     api::ApiConfig,
@@ -19,7 +23,7 @@ pub(crate) use file::deserialize_url;
 
 pub(crate) struct ZoneConfig {
     pub(crate) origin: Option<Fqdn>,
-    pub(crate) upstream: Option<Upstream>,
+    pub(crate) upstreams: VecDeque<Upstream>,
     pub(crate) ttl: u32,
     pub(crate) authoritative: bool,
 }
@@ -28,7 +32,7 @@ impl Default for ZoneConfig {
     fn default() -> Self {
         Self {
             origin: None,
-            upstream: None,
+            upstreams: VecDeque::new(),
             ttl: 300,
             authoritative: false,
         }
@@ -39,7 +43,7 @@ impl From<&file::DefaultZoneConfig> for ZoneConfig {
     fn from(defaults: &file::DefaultZoneConfig) -> Self {
         Self {
             origin: None,
-            upstream: defaults.upstream.clone(),
+            upstreams: VecDeque::from_iter(defaults.upstream.iter().cloned()),
             ttl: defaults.ttl.unwrap_or(300),
             authoritative: false,
         }
@@ -73,7 +77,7 @@ impl ZoneConfig {
         self.origin = Some(origin);
 
         if let Some(ref upstream) = config.config.upstream {
-            self.upstream = Some(upstream.clone());
+            self.upstreams.push_front(upstream.clone());
         }
         if let Some(ttl) = config.config.ttl {
             self.ttl = ttl;
@@ -92,8 +96,9 @@ impl fmt::Debug for ZoneConfig {
         parts.push(format!("ttl={}", self.ttl));
         parts.push(format!("authoritative={}", self.authoritative));
 
-        if let Some(ref upstream) = self.upstream {
-            parts.push(format!("upstream={:?}", upstream));
+        if !self.upstreams.is_empty() {
+            let strings: Vec<String> = self.upstreams.iter().map(|u| format!("{u:?}")).collect();
+            parts.push(format!("upstream={:?}", strings.join(",")));
         }
 
         f.pad(&format!("[{}]", parts.join(" ")))

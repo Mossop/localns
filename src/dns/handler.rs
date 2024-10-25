@@ -8,9 +8,10 @@ use hickory_server::{
 use tokio::sync::RwLock;
 use tracing::instrument;
 
-use crate::dns::ServerState;
-
-use super::server::QueryContext;
+use crate::{
+    config::Zones,
+    dns::{query::QueryState, ServerState},
+};
 
 fn serve_failed() -> ResponseInfo {
     let mut header = Header::new();
@@ -20,11 +21,11 @@ fn serve_failed() -> ResponseInfo {
 
 #[derive(Clone)]
 pub(crate) struct Handler {
-    pub server_state: Arc<RwLock<ServerState>>,
+    pub server_state: Arc<RwLock<ServerState<Zones>>>,
 }
 
 impl Handler {
-    async fn server_state(&self) -> ServerState {
+    async fn server_state(&self) -> ServerState<Zones> {
         let server = self.server_state.read().await;
         server.clone()
     }
@@ -85,18 +86,19 @@ impl RequestHandler for Handler {
             MessageType::Query => match request.op_code() {
                 OpCode::Query => {
                     let server_state = self.server_state().await;
-                    let mut context = QueryContext::new(server_state.records, server_state.zones);
-                    context
-                        .perform_query(request.query().original(), request.recursion_desired())
-                        .await;
+                    let mut query_state = QueryState::new(
+                        request.query().original().clone(),
+                        request.recursion_desired(),
+                    );
+                    server_state.perform_query(&mut query_state).await;
 
                     response_handle
                         .send_response(builder.build(
-                            context.header(request.header()),
-                            context.answers(),
-                            context.name_servers(),
-                            context.soa(),
-                            context.additionals(),
+                            query_state.header(request.header()),
+                            query_state.answers(),
+                            query_state.name_servers(),
+                            query_state.soa(),
+                            query_state.additionals(),
                         ))
                         .await
                 }

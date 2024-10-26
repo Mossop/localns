@@ -121,18 +121,15 @@ impl Upstream {
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
-
     use hickory_client::{
         op::{Query, ResponseCode},
-        proto::rr::{self, rdata},
         rr::{DNSClass, RecordType},
     };
     use testcontainers::core::ContainerPort;
 
     use crate::{
         dns::{query::QueryState, Upstream},
-        test::{coredns_container, name},
+        test::{coredns_container, name, rdata_a, rdata_cname},
         util::{Address, Host},
     };
 
@@ -147,6 +144,7 @@ $ORIGIN example.org.
     3600 IN NS b.iana-servers.net.
 
 www     IN A     10.10.10.5
+        IN AAAA  2001::1
 data    IN CNAME www
 "#,
         )
@@ -191,10 +189,7 @@ data    IN CNAME www
         assert_eq!(*record.name(), name("www.example.org."));
         assert_eq!(record.dns_class(), DNSClass::IN);
         assert_eq!(record.record_type(), RecordType::A);
-        assert_eq!(
-            *record.data().unwrap(),
-            rr::RData::A(rdata::A(Ipv4Addr::new(10, 10, 10, 5)))
-        );
+        assert_eq!(*record.data().unwrap(), rdata_a("10.10.10.5"));
 
         let mut query_state = QueryState::new(
             Query::query(name("data.example.org."), RecordType::A),
@@ -215,17 +210,11 @@ data    IN CNAME www
         assert_eq!(*record.name(), name("data.example.org."));
         assert_eq!(record.dns_class(), DNSClass::IN);
         assert_eq!(record.record_type(), RecordType::CNAME);
-        assert_eq!(
-            *record.data().unwrap(),
-            rr::RData::CNAME(rdata::CNAME(name("www.example.org.")))
-        );
+        assert_eq!(*record.data().unwrap(), rdata_cname("www.example.org."));
 
         let record = answers.next().unwrap();
         assert_eq!(*record.name(), name("www.example.org."));
         assert_eq!(record.dns_class(), DNSClass::IN);
-        assert_eq!(
-            *record.data().unwrap(),
-            rr::RData::A(rdata::A(Ipv4Addr::new(10, 10, 10, 5)))
-        );
+        assert_eq!(*record.data().unwrap(), rdata_a("10.10.10.5"));
     }
 }

@@ -1,7 +1,7 @@
-use std::{ops::Deref, str::FromStr, sync::Arc, time::Duration};
+use std::{net::Ipv4Addr, ops::Deref, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::Error;
-use hickory_server::proto::rr::domain::Name;
+use hickory_server::proto::rr::{domain::Name, rdata, RData};
 use tempfile::NamedTempFile;
 use testcontainers::{
     core::{Mount, WaitFor},
@@ -87,6 +87,14 @@ impl RecordServer for TestServer {
 
 pub(crate) fn name(n: &str) -> Name {
     Name::from_str(n).unwrap()
+}
+
+pub(crate) fn rdata_a(ip: &str) -> RData {
+    RData::A(rdata::A(Ipv4Addr::from_str(ip).unwrap()))
+}
+
+pub(crate) fn rdata_cname(n: &str) -> RData {
+    RData::CNAME(rdata::CNAME(name(n)))
 }
 
 pub(crate) async fn coredns_container(

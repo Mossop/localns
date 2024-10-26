@@ -165,13 +165,13 @@ impl DnsServer {
 mod tests {
     use hickory_server::proto::{
         op::{Query, ResponseCode},
-        rr::{self, rdata, DNSClass, RecordType},
+        rr::{DNSClass, RecordType},
     };
 
     use crate::{
         config::{ZoneConfig, ZoneConfigProvider},
         dns::{query::QueryState, Fqdn, RData, Record, RecordSet, ServerState},
-        test::name,
+        test::{name, rdata_a, rdata_cname},
     };
 
     struct EmptyZones {}
@@ -217,10 +217,7 @@ mod tests {
         assert_eq!(*record.name(), name("test.home.local."));
         assert_eq!(record.dns_class(), DNSClass::IN);
         assert_eq!(record.record_type(), RecordType::CNAME);
-        assert_eq!(
-            *record.data().unwrap(),
-            rr::RData::CNAME(rdata::CNAME(name("other.home.local.")))
-        );
+        assert_eq!(*record.data().unwrap(), rdata_cname("other.home.local."));
 
         records.insert(Record::new(
             Fqdn::from("other.home.local."),
@@ -241,18 +238,12 @@ mod tests {
         assert_eq!(*record.name(), name("test.home.local."));
         assert_eq!(record.dns_class(), DNSClass::IN);
         assert_eq!(record.record_type(), RecordType::CNAME);
-        assert_eq!(
-            *record.data().unwrap(),
-            rr::RData::CNAME(rdata::CNAME(name("other.home.local.")))
-        );
+        assert_eq!(*record.data().unwrap(), rdata_cname("other.home.local."));
 
         let record = answers.first().unwrap();
         assert_eq!(*record.name(), name("other.home.local."));
         assert_eq!(record.dns_class(), DNSClass::IN);
         assert_eq!(record.record_type(), RecordType::A);
-        assert_eq!(
-            *record.data().unwrap(),
-            rr::RData::A(rdata::A("10.10.45.23".parse().unwrap()))
-        );
+        assert_eq!(*record.data().unwrap(), rdata_a("10.10.45.23"));
     }
 }

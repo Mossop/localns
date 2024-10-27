@@ -1,25 +1,26 @@
-use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::net::Ipv4Addr;
-use std::path::Path;
-use std::str::FromStr;
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    net::Ipv4Addr,
+    path::Path,
+    str::FromStr,
+};
 
 use anyhow::{bail, Context};
-use bollard::models;
-use bollard::{Docker, API_DEFAULT_VERSION};
+use bollard::{models, Docker, API_DEFAULT_VERSION};
 use figment::value::magic::RelativePathBuf;
 use futures::StreamExt;
 use serde::Deserialize;
 use tokio::time::sleep;
 use tracing::instrument;
 
-use crate::dns::{RData, Record, RecordSet};
 use crate::{
     backoff::Backoff,
+    dns::{RData, Record, RecordSet},
     sources::{SourceConfig, SourceId, SourceType, SpawnHandle},
-    RecordServer, SourceRecords,
+    util::Address,
+    Error, RecordServer, SourceRecords,
 };
-use crate::{util::Address, Error};
 
 #[derive(Debug, PartialEq, Deserialize, Clone)]
 pub(crate) struct DockerLocal {}

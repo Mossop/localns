@@ -1,10 +1,11 @@
-use serde::Deserialize;
 use std::{
     fmt::{self, Display},
     hash::Hash,
     net::{AddrParseError, IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     str::FromStr,
 };
+
+use serde::Deserialize;
 
 use crate::dns::{Fqdn, RData};
 

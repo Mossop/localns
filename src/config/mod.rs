@@ -1,14 +1,15 @@
-use figment::{
-    providers::{Env, Format, Yaml},
-    value::{Uncased, UncasedStr},
-    Figment,
-};
-use hickory_server::{proto::rr, proto::rr::rdata::SOA};
 use std::{
     collections::{HashMap, VecDeque},
     fmt,
     path::Path,
 };
+
+use figment::{
+    providers::{Env, Format, Yaml},
+    value::{Uncased, UncasedStr},
+    Figment,
+};
+use hickory_server::proto::{rr, rr::rdata::SOA};
 
 use crate::{
     api::ApiConfig,

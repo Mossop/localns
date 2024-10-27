@@ -112,14 +112,13 @@ impl SourceConfig for DhcpConfig {
 mod tests {
     use std::{fs::File, io::Write, net::Ipv4Addr, str::FromStr};
 
-    use hickory_client::rr::Name;
     use tempfile::TempDir;
     use uuid::Uuid;
 
     use crate::{
         dns::{Fqdn, RData},
         sources::{dhcp::DhcpConfig, SourceConfig, SourceId, SourceType},
-        test::TestServer,
+        test::{name, TestServer},
     };
 
     #[test]
@@ -193,9 +192,8 @@ mod tests {
 
         let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
-        let name = Name::from_str("caldigit.home.local.").unwrap();
         let records = test_server
-            .wait_for_records(|records| records.has_name(&name))
+            .wait_for_records(|records| records.has_name(&name("caldigit.home.local.")))
             .await;
 
         assert!(records.contains(
@@ -221,9 +219,8 @@ mod tests {
             .unwrap();
         }
 
-        let name = Name::from_str("other.home.local.").unwrap();
         let records = test_server
-            .wait_for_records(|records| records.has_name(&name))
+            .wait_for_records(|records| records.has_name(&name("other.home.local.")))
             .await;
 
         assert!(records.doesnt_contain(&Fqdn::from("caldigit.home.local")));

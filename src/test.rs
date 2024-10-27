@@ -1,15 +1,16 @@
 use std::{net::Ipv4Addr, ops::Deref, str::FromStr, sync::Arc, time::Duration};
 
 use hickory_server::proto::rr::{domain::Name, rdata, RData};
+use reqwest::header::HeaderValue;
 use tempfile::{tempdir, TempDir};
 use testcontainers::{
-    core::{ContainerPort, Mount},
+    core::{wait::HttpWaitStrategy, ContainerPort, Mount, WaitFor},
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
 use tokio::{
     fs,
-    io::{AsyncBufReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     sync::{Mutex, Notify},
     time::timeout,
 };
@@ -34,6 +35,10 @@ impl TestServer {
             notify: Arc::new(Notify::new()),
             records: Default::default(),
         }
+    }
+
+    pub(crate) async fn records(&self) -> Option<RecordSet> {
+        self.records.lock().await.clone()
     }
 
     pub(crate) async fn wait_for_change(&self) {
@@ -108,6 +113,79 @@ impl Container {
             .await
             .unwrap()
     }
+
+    pub(crate) async fn get_tcp_port(&self, port: u16) -> u16 {
+        self.container
+            .get_host_port_ipv4(ContainerPort::Tcp(port))
+            .await
+            .unwrap()
+    }
+}
+
+pub(crate) async fn traefik_container(config: &str) -> Container {
+    let temp_dir = tempdir().unwrap();
+
+    let config_file = temp_dir.path().join("traefik.yml");
+
+    let mut file = fs::File::create(&config_file).await.unwrap();
+    file.write_all(
+        r#"api: {}
+
+entryPoints:
+  http:
+    address: ":80"
+
+providers:
+  file:
+    directory: /etc/traefik/conf.d
+"#
+        .as_bytes(),
+    )
+    .await
+    .unwrap();
+
+    let provider_dir = temp_dir.path().join("conf.d");
+    fs::create_dir(&provider_dir).await.unwrap();
+
+    let api_file = provider_dir.join("api.yml");
+    let mut file = fs::File::create(&api_file).await.unwrap();
+    file.write_all(
+        r#"http:
+  routers:
+    api:
+      rule: Host(`localhost`)
+      service: api@internal
+"#
+        .as_bytes(),
+    )
+    .await
+    .unwrap();
+
+    let config_file = provider_dir.join("config.yml");
+    let mut file = fs::File::create(&config_file).await.unwrap();
+    file.write_all(config.as_bytes()).await.unwrap();
+
+    println!("Starting traefik container...");
+
+    let wait = HttpWaitStrategy::new("/api/overview")
+        .with_port(ContainerPort::Tcp(80))
+        .with_header("Host", HeaderValue::from_static("localhost"))
+        .with_expected_status_code(200_u16);
+
+    let container = GenericImage::new("traefik", "v3.1")
+        .with_wait_for(WaitFor::Http(wait))
+        .with_mount(Mount::bind_mount(
+            temp_dir.path().to_str().unwrap(),
+            "/etc/traefik",
+        ))
+        .start()
+        .await
+        .unwrap();
+
+    Container {
+        _temp_dir: temp_dir,
+        container,
+    }
 }
 
 pub(crate) async fn coredns_container(zone: &str, zonefile: &str) -> Container {
@@ -123,47 +201,16 @@ pub(crate) async fn coredns_container(zone: &str, zonefile: &str) -> Container {
     let mut file = fs::File::create(&zone_file).await.unwrap();
     file.write_all(zonefile.as_bytes()).await.unwrap();
 
-    println!("Starting coredns container...");
-
     let container = GenericImage::new("coredns/coredns", "1.11.3")
+        .with_wait_for(WaitFor::message_on_stdout("CoreDNS-"))
         .with_cmd(["-conf", "/data/Corefile"])
         .with_mount(Mount::bind_mount(
             temp_dir.path().to_str().unwrap(),
             "/data",
         ))
-        .pull_image()
-        .await
-        .unwrap()
         .start()
         .await
         .unwrap();
-
-    println!(
-        "Got host port: {}",
-        container.get_host_port_ipv4(53).await.unwrap()
-    );
-
-    let mut stdout = container.stdout(true);
-    let mut stderr = container.stderr(true);
-    let mut out_line = String::new();
-    let mut err_line = String::new();
-    loop {
-        tokio::select! {
-            r = stdout.read_line(&mut out_line) => {
-                r.unwrap();
-                eprint!("out: {out_line}");
-                if out_line.contains("CoreDNS-") {
-                    break;
-                }
-                out_line.clear();
-            }
-            r = stderr.read_line(&mut err_line) => {
-                r.unwrap();
-                eprint!("err: {err_line}");
-                err_line.clear();
-            }
-        };
-    }
 
     Container {
         _temp_dir: temp_dir,

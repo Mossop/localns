@@ -14,11 +14,15 @@ use crate::{
     Error, RecordServer, SourceRecords,
 };
 
+const POLL_INTERVAL_MS: u64 = 15000;
+
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub(crate) struct TraefikConfig {
     #[serde(deserialize_with = "deserialize_url")]
     url: Url,
     address: Option<RDataConfig>,
+    #[serde(default)]
+    interval_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -40,7 +44,7 @@ enum LoopResult {
     Quit,
 }
 
-#[instrument(fields(%source_id), skip(client))]
+#[instrument(fields(%source_id, %base_url), skip(client))]
 async fn api_call<T>(
     source_id: &SourceId,
     client: &Client,
@@ -220,7 +224,10 @@ async fn traefik_loop<S: RecordServer>(
             .add_source_records(SourceRecords::new(source_id, None, records))
             .await;
 
-        sleep(Duration::from_secs(30)).await;
+        sleep(Duration::from_millis(
+            traefik_config.interval_ms.unwrap_or(POLL_INTERVAL_MS),
+        ))
+        .await;
     }
 }
 
@@ -264,6 +271,14 @@ impl SourceConfig for TraefikConfig {
 
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
+
+    use crate::{
+        dns::{Fqdn, RData, RDataConfig},
+        sources::{traefik::TraefikConfig, SourceConfig, SourceId, SourceType},
+        test::{traefik_container, TestServer},
+    };
+
     #[test]
     fn parse_hosts() {
         fn do_parse(rule: &str) -> Vec<String> {
@@ -338,5 +353,81 @@ mod tests {
             do_parse("Host(`allthethings.dev`) || Host(`foo.example.com`)"),
             vec!["allthethings.dev.", "foo.example.com."]
         );
+    }
+
+    #[tokio::test]
+    async fn integration() {
+        let (_handle, test_server) = {
+            let traefik = traefik_container(
+                r#"http:
+  routers:
+    test-router:
+      entryPoints:
+      - http
+      service: service-foo
+      rule: Host(`test.example.org`)
+
+  services:
+    test-service:
+      loadBalancer:
+        servers:
+        - url: http://foo.bar.com/
+"#,
+            )
+            .await;
+            let port = traefik.get_tcp_port(80).await;
+
+            let source_id = SourceId {
+                server_id: Uuid::new_v4(),
+                source_type: SourceType::Traefik,
+                source_name: "test".to_string(),
+            };
+
+            let config = TraefikConfig {
+                url: format!("http://localhost:{port}/api/").parse().unwrap(),
+                address: None,
+                interval_ms: Some(100),
+            };
+
+            let test_server = TestServer::new(&source_id);
+
+            let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
+
+            test_server.wait_for_change().await;
+
+            let records = test_server.records().await.unwrap();
+
+            assert!(records.contains(
+                &Fqdn::from("test.example.org"),
+                &RData::Cname(Fqdn::from("localhost"))
+            ));
+
+            let config = TraefikConfig {
+                url: format!("http://localhost:{port}/api/").parse().unwrap(),
+                address: Some(RDataConfig::RData(RData::A("10.10.15.23".parse().unwrap()))),
+                interval_ms: Some(100),
+            };
+
+            let test_server = TestServer::new(&source_id);
+
+            let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
+
+            test_server.wait_for_change().await;
+
+            let records = test_server.records().await.unwrap();
+
+            assert!(records.contains(
+                &Fqdn::from("test.example.org"),
+                &RData::A("10.10.15.23".parse().unwrap())
+            ));
+
+            (handle, test_server)
+        };
+
+        test_server.wait_for_change().await;
+
+        let records = test_server.records().await;
+
+        assert_eq!(records, None);
     }
 }

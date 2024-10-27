@@ -37,4 +37,5 @@ anyhow = { version = "1.0.91", features = ["backtrace"] }
 
 [dev-dependencies]
 tempfile = "^3.13.0"
-testcontainers = "^0.23.1"
+testcontainers = { version = "^0.23.1", features = ["http_wait"] }
+tracing-test = "^0.2.5"

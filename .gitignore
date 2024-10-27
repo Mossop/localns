@@ -6,3 +6,5 @@
 /*.core
 /*.leases
 .python-version
+/*.profraw
+/*.profdata

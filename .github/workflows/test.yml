@@ -28,12 +28,31 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools
+
+      - name: Install helpers
+        run: cargo install cargo-binutils && sudo apt install jq
 
       - name: Cargo check
         run: cargo check --all-features
 
       - name: Run tests
         run: cargo test --all-features
+        env:
+          RUSTFLAGS: "-C instrument-coverage"
+
+      - name: Merge profiling reports
+        run: rust-profdata merge -sparse default_*.profraw -o localns.profdata
+
+      - name: Export profiling data
+        run: ./cov_wrapper.sh export --instr-profile=localns.profdata --format=lcov --sources src >coverage.txt
+
+      - uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage1.txt
+          token: ${{ secrets.CODECOV_TOKEN }}
+          verbose: true
 
   lint:
     name: "Lints"

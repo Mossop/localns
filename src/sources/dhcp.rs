@@ -110,8 +110,7 @@ impl SourceConfig for DhcpConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write};
-    use std::{net::Ipv4Addr, str::FromStr};
+    use std::{fs::File, io::Write, net::Ipv4Addr, str::FromStr};
 
     use hickory_client::rr::Name;
     use tempfile::TempDir;

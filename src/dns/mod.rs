@@ -19,15 +19,14 @@ mod query;
 mod record;
 mod upstream;
 
+pub(crate) use record::{Fqdn, RData, RDataConfig, Record, RecordSet, RecordSource};
+pub(crate) use upstream::Upstream;
+
+use self::handler::Handler;
 use crate::{
     config::{ZoneConfigProvider, Zones},
     dns::query::QueryState,
 };
-
-use self::handler::Handler;
-
-pub(crate) use record::{Fqdn, RData, RDataConfig, Record, RecordSet, RecordSource};
-pub(crate) use upstream::Upstream;
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 pub(crate) struct ServerConfig {

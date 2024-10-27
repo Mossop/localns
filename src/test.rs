@@ -1,16 +1,15 @@
 use std::{net::Ipv4Addr, ops::Deref, str::FromStr, sync::Arc, time::Duration};
 
-use anyhow::Error;
 use hickory_server::proto::rr::{domain::Name, rdata, RData};
-use tempfile::NamedTempFile;
+use tempfile::{tempdir, TempDir};
 use testcontainers::{
-    core::{Mount, WaitFor},
+    core::{ContainerPort, Mount},
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
 use tokio::{
     fs,
-    io::AsyncWriteExt,
+    io::{AsyncBufReadExt, AsyncWriteExt},
     sync::{Mutex, Notify},
     time::timeout,
 };
@@ -97,31 +96,77 @@ pub(crate) fn rdata_cname(n: &str) -> RData {
     RData::CNAME(rdata::CNAME(name(n)))
 }
 
-pub(crate) async fn coredns_container(
-    zone: &str,
-    zonefile: &str,
-) -> Result<ContainerAsync<GenericImage>, Error> {
-    let zone_file = NamedTempFile::new()?;
-    let config_file = NamedTempFile::new()?;
+pub(crate) struct Container {
+    _temp_dir: TempDir,
+    container: ContainerAsync<GenericImage>,
+}
 
-    let mut file = fs::File::from_std(config_file.reopen()?);
-    file.write_all(format!("{zone} {{\n  file /zone\n}}\n").as_bytes())
-        .await?;
+impl Container {
+    pub(crate) async fn get_udp_port(&self, port: u16) -> u16 {
+        self.container
+            .get_host_port_ipv4(ContainerPort::Udp(port))
+            .await
+            .unwrap()
+    }
+}
 
-    let mut file = fs::File::from_std(zone_file.reopen()?);
-    file.write_all(zonefile.as_bytes()).await?;
+pub(crate) async fn coredns_container(zone: &str, zonefile: &str) -> Container {
+    let temp_dir = tempdir().unwrap();
+    let zone_file = temp_dir.path().join("zone");
+    let config_file = temp_dir.path().join("Corefile");
 
-    Ok(GenericImage::new("coredns/coredns", "1.11.3")
-        .with_wait_for(WaitFor::message_on_stdout("CoreDNS-1.11.3"))
-        .with_cmd(["-conf", "/Corefile"])
+    let mut file = fs::File::create(&config_file).await.unwrap();
+    file.write_all(format!("{zone} {{\n  file /data/zone\n}}\n").as_bytes())
+        .await
+        .unwrap();
+
+    let mut file = fs::File::create(&zone_file).await.unwrap();
+    file.write_all(zonefile.as_bytes()).await.unwrap();
+
+    println!("Starting coredns container...");
+
+    let container = GenericImage::new("coredns/coredns", "1.11.3")
+        .with_cmd(["-conf", "/data/Corefile"])
         .with_mount(Mount::bind_mount(
-            zone_file.path().to_str().unwrap(),
-            "/zone",
+            temp_dir.path().to_str().unwrap(),
+            "/data",
         ))
-        .with_mount(Mount::bind_mount(
-            config_file.path().to_str().unwrap(),
-            "/Corefile",
-        ))
+        .pull_image()
+        .await
+        .unwrap()
         .start()
-        .await?)
+        .await
+        .unwrap();
+
+    println!(
+        "Got host port: {}",
+        container.get_host_port_ipv4(53).await.unwrap()
+    );
+
+    let mut stdout = container.stdout(true);
+    let mut stderr = container.stderr(true);
+    let mut out_line = String::new();
+    let mut err_line = String::new();
+    loop {
+        tokio::select! {
+            r = stdout.read_line(&mut out_line) => {
+                r.unwrap();
+                eprint!("out: {out_line}");
+                if out_line.contains("CoreDNS-") {
+                    break;
+                }
+                out_line.clear();
+            }
+            r = stderr.read_line(&mut err_line) => {
+                r.unwrap();
+                eprint!("err: {err_line}");
+                err_line.clear();
+            }
+        };
+    }
+
+    Container {
+        _temp_dir: temp_dir,
+        container,
+    }
 }

@@ -14,7 +14,7 @@ use crate::{
 
 struct UrlVisitor;
 
-impl<'de> Visitor<'de> for UrlVisitor {
+impl Visitor<'_> for UrlVisitor {
     type Value = Url;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

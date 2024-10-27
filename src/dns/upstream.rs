@@ -125,7 +125,6 @@ mod tests {
         op::{Query, ResponseCode},
         rr::{DNSClass, RecordType},
     };
-    use testcontainers::core::ContainerPort;
 
     use crate::{
         dns::{query::QueryState, Upstream},
@@ -148,17 +147,11 @@ www     IN A     10.10.10.5
 data    IN CNAME www
 "#,
         )
-        .await
-        .unwrap();
+        .await;
 
         let upstream = Upstream::from(Address {
             host: Host::from("127.0.0.1"),
-            port: Some(
-                coredns
-                    .get_host_port_ipv4(ContainerPort::Udp(53))
-                    .await
-                    .unwrap(),
-            ),
+            port: Some(coredns.get_udp_port(53).await),
         });
 
         let mut query_state = QueryState::new(

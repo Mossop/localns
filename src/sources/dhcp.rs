@@ -206,7 +206,7 @@ mod tests {
             &RData::A(Ipv4Addr::from_str("10.10.1.70").unwrap())
         ));
 
-        assert!(records.doesnt_contain(&Fqdn::from("other.home.local")));
+        assert!(!records.has_name(&name("other.home.local")));
 
         {
             let mut temp_file = File::create(&lease_file).unwrap();
@@ -223,9 +223,9 @@ mod tests {
             .wait_for_records(|records| records.has_name(&name("other.home.local.")))
             .await;
 
-        assert!(records.doesnt_contain(&Fqdn::from("caldigit.home.local")));
+        assert!(!records.has_name(&name("caldigit.home.local.")));
 
-        assert!(records.doesnt_contain(&Fqdn::from("laptop.home.local")));
+        assert!(!records.has_name(&name("laptop.home.local.")));
 
         assert!(records.contains(
             &Fqdn::from("other.home.local"),

@@ -86,3 +86,87 @@ impl SourceConfig for FileConfig {
         Ok(WatcherHandle { _watcher: watcher })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{net::Ipv4Addr, str::FromStr};
+
+    use tempfile::TempDir;
+    use tokio::{fs, io::AsyncWriteExt};
+    use uuid::Uuid;
+
+    use crate::{
+        dns::{Fqdn, RData},
+        sources::{file::FileConfig, SourceConfig, SourceId, SourceType},
+        test::{name, TestServer},
+    };
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn integration() {
+        let temp = TempDir::new().unwrap();
+
+        let zone_file = temp.path().join("zone.yml");
+
+        fs::File::create(&zone_file)
+            .await
+            .unwrap()
+            .write_all(
+                r#"
+www.home.local: 10.14.23.123
+other.home.local: www.home.local
+"#
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+
+        let source_id = SourceId {
+            server_id: Uuid::new_v4(),
+            source_type: SourceType::File,
+            source_name: "test".to_string(),
+        };
+
+        let config = FileConfig::from(zone_file.as_path());
+
+        let test_server = TestServer::new(&source_id);
+
+        let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
+
+        let records = test_server
+            .wait_for_records(|records| records.has_name(&name("www.home.local.")))
+            .await;
+
+        assert!(records.contains(
+            &Fqdn::from("www.home.local"),
+            &RData::A(Ipv4Addr::from_str("10.14.23.123").unwrap())
+        ));
+
+        assert!(records.contains(
+            &Fqdn::from("other.home.local"),
+            &RData::Cname(Fqdn::from("www.home.local"))
+        ));
+
+        fs::File::create(&zone_file)
+            .await
+            .unwrap()
+            .write_all(
+                r#"
+www.home.local: 10.14.23.123
+"#
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+
+        let records = test_server
+            .wait_for_records(|records| !records.has_name(&name("other.home.local.")))
+            .await;
+
+        assert!(!records.has_name(&name("other.home.local")));
+
+        assert!(records.contains(
+            &Fqdn::from("www.home.local"),
+            &RData::A(Ipv4Addr::from_str("10.14.23.123").unwrap())
+        ));
+    }
+}

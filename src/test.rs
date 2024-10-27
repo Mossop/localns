@@ -42,7 +42,13 @@ impl TestServer {
     }
 
     pub(crate) async fn wait_for_change(&self) {
-        if timeout(Duration::from_secs(1), self.notify.notified())
+        let notified = self.notify.notified();
+        tokio::pin!(notified);
+        if notified.as_mut().enable() {
+            return;
+        }
+
+        if timeout(Duration::from_secs(2), notified.as_mut())
             .await
             .is_err()
         {
@@ -76,7 +82,7 @@ impl RecordServer for TestServer {
         assert_eq!(new_records.source_id, self.source_id);
 
         let mut inner = self.records.lock().await;
-        self.notify.notify_waiters();
+        self.notify.notify_one();
         inner.replace(new_records.records);
     }
 
@@ -84,7 +90,7 @@ impl RecordServer for TestServer {
         assert_eq!(source_id, &self.source_id);
 
         let mut inner = self.records.lock().await;
-        self.notify.notify_waiters();
+        self.notify.notify_one();
         inner.take();
     }
 }

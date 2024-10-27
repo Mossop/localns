@@ -397,11 +397,6 @@ impl RecordSet {
     }
 
     #[cfg(test)]
-    pub fn doesnt_contain(&self, name: &Fqdn) -> bool {
-        !self.records.contains_key(name)
-    }
-
-    #[cfg(test)]
     pub fn contains_reverse<I: Into<IpAddr>>(&self, ip: I, name: &Fqdn) -> bool {
         self.reverse
             .get(&ip.into())

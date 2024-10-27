@@ -1,4 +1,4 @@
-use std::{net::Ipv4Addr, ops::Deref, str::FromStr, sync::Arc, time::Duration};
+use std::{net::Ipv4Addr, path::Path, str::FromStr, time::Duration};
 
 use hickory_server::proto::rr::{domain::Name, rdata, RData};
 use reqwest::header::HeaderValue;
@@ -8,12 +8,7 @@ use testcontainers::{
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
-use tokio::{
-    fs,
-    io::AsyncWriteExt,
-    sync::{Mutex, Notify},
-    time::timeout,
-};
+use tokio::{fs, io::AsyncWriteExt, sync::watch, time::timeout};
 
 use crate::{
     dns::RecordSet,
@@ -24,56 +19,63 @@ use crate::{
 #[derive(Clone)]
 pub(crate) struct TestServer {
     source_id: SourceId,
-    notify: Arc<Notify>,
-    records: Arc<Mutex<Option<RecordSet>>>,
+    sender: watch::Sender<Option<RecordSet>>,
+    receiver: watch::Receiver<Option<RecordSet>>,
 }
 
 impl TestServer {
     pub(crate) fn new(source_id: &SourceId) -> Self {
+        let (sender, receiver) = watch::channel(None);
+
         Self {
             source_id: source_id.clone(),
-            notify: Arc::new(Notify::new()),
-            records: Default::default(),
+            sender,
+            receiver,
         }
     }
 
-    pub(crate) async fn records(&self) -> Option<RecordSet> {
-        self.records.lock().await.clone()
-    }
-
-    pub(crate) async fn wait_for_change(&self) {
-        let notified = self.notify.notified();
-        tokio::pin!(notified);
-        if notified.as_mut().enable() {
-            return;
+    async fn wait_for_change(&mut self) -> Option<RecordSet> {
+        match timeout(Duration::from_secs(10), self.receiver.changed()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => panic!("Record stream closed"),
+            Err(_) => panic!("Timed out waiting for new records"),
         }
 
-        if timeout(Duration::from_secs(2), notified.as_mut())
-            .await
-            .is_err()
+        self.receiver.borrow_and_update().clone()
+    }
+
+    pub(crate) async fn wait_for_maybe_records<F>(&mut self, mut cb: F) -> Option<RecordSet>
+    where
+        F: FnMut(&Option<RecordSet>) -> bool,
+    {
         {
-            panic!("Timed out waiting for new records");
+            let records = self.receiver.borrow_and_update();
+            if cb(&records) {
+                return records.clone();
+            }
+        }
+
+        loop {
+            let records = self.wait_for_change().await;
+            if cb(&records) {
+                return records;
+            }
         }
     }
 
-    pub(crate) async fn wait_for_records<F>(&self, mut cb: F) -> RecordSet
+    pub(crate) async fn wait_for_records<F>(&mut self, mut cb: F) -> RecordSet
     where
         F: FnMut(&RecordSet) -> bool,
     {
-        loop {
-            let notified = {
-                let inner = self.records.lock().await;
-                if let Some(records) = inner.deref() {
-                    if cb(records) {
-                        return records.clone();
-                    }
-                }
-
-                self.wait_for_change()
-            };
-
-            notified.await;
-        }
+        self.wait_for_maybe_records(|maybe| {
+            if let Some(records) = maybe {
+                cb(records)
+            } else {
+                false
+            }
+        })
+        .await
+        .unwrap()
     }
 }
 
@@ -81,17 +83,13 @@ impl RecordServer for TestServer {
     async fn add_source_records(&self, new_records: SourceRecords) {
         assert_eq!(new_records.source_id, self.source_id);
 
-        let mut inner = self.records.lock().await;
-        self.notify.notify_one();
-        inner.replace(new_records.records);
+        self.sender.send(Some(new_records.records)).unwrap();
     }
 
     async fn clear_source_records(&self, source_id: &SourceId) {
         assert_eq!(source_id, &self.source_id);
 
-        let mut inner = self.records.lock().await;
-        self.notify.notify_one();
-        inner.take();
+        self.sender.send(None).unwrap();
     }
 }
 
@@ -128,14 +126,21 @@ impl Container {
     }
 }
 
+pub(crate) async fn write_file<D: AsRef<[u8]>>(path: &Path, data: D) {
+    let mut file = fs::File::create(path).await.unwrap();
+    file.write_all(data.as_ref()).await.unwrap();
+    file.flush().await.unwrap();
+}
+
 pub(crate) async fn traefik_container(config: &str) -> Container {
     let temp_dir = tempdir().unwrap();
 
     let config_file = temp_dir.path().join("traefik.yml");
 
-    let mut file = fs::File::create(&config_file).await.unwrap();
-    file.write_all(
-        r#"api: {}
+    write_file(
+        &config_file,
+        r#"
+api: {}
 
 entryPoints:
   http:
@@ -144,34 +149,28 @@ entryPoints:
 providers:
   file:
     directory: /etc/traefik/conf.d
-"#
-        .as_bytes(),
+"#,
     )
-    .await
-    .unwrap();
+    .await;
 
     let provider_dir = temp_dir.path().join("conf.d");
     fs::create_dir(&provider_dir).await.unwrap();
 
     let api_file = provider_dir.join("api.yml");
-    let mut file = fs::File::create(&api_file).await.unwrap();
-    file.write_all(
-        r#"http:
+    write_file(
+        &api_file,
+        r#"
+http:
   routers:
     api:
       rule: Host(`localhost`)
       service: api@internal
-"#
-        .as_bytes(),
+"#,
     )
-    .await
-    .unwrap();
+    .await;
 
     let config_file = provider_dir.join("config.yml");
-    let mut file = fs::File::create(&config_file).await.unwrap();
-    file.write_all(config.as_bytes()).await.unwrap();
-
-    println!("Starting traefik container...");
+    write_file(&config_file, config).await;
 
     let wait = HttpWaitStrategy::new("/api/overview")
         .with_port(ContainerPort::Tcp(80))
@@ -199,13 +198,9 @@ pub(crate) async fn coredns_container(zone: &str, zonefile: &str) -> Container {
     let zone_file = temp_dir.path().join("zone");
     let config_file = temp_dir.path().join("Corefile");
 
-    let mut file = fs::File::create(&config_file).await.unwrap();
-    file.write_all(format!("{zone} {{\n  file /data/zone\n}}\n").as_bytes())
-        .await
-        .unwrap();
+    write_file(&config_file, format!("{zone} {{\n  file /data/zone\n}}\n")).await;
 
-    let mut file = fs::File::create(&zone_file).await.unwrap();
-    file.write_all(zonefile.as_bytes()).await.unwrap();
+    write_file(&zone_file, zonefile).await;
 
     let container = GenericImage::new("coredns/coredns", "1.11.3")
         .with_wait_for(WaitFor::message_on_stdout("CoreDNS-"))

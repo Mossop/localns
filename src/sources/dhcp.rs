@@ -110,7 +110,7 @@ impl SourceConfig for DhcpConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write, net::Ipv4Addr, str::FromStr};
+    use std::{net::Ipv4Addr, str::FromStr};
 
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -118,7 +118,7 @@ mod tests {
     use crate::{
         dns::{Fqdn, RData},
         sources::{dhcp::DhcpConfig, SourceConfig, SourceId, SourceType},
-        test::{name, TestServer},
+        test::{name, write_file, TestServer},
     };
 
     #[test]
@@ -165,17 +165,14 @@ mod tests {
 
         let lease_file = temp.path().join("leases");
 
-        {
-            let mut temp_file = File::create(&lease_file).unwrap();
-            writeln!(
-                temp_file,
-                r#"
+        write_file(
+            &lease_file,
+            r#"
 1646820667 64:4b:c2:7a:cd:83 10.10.1.24 caldigit 01:64:4b:c2:7a:cd:83
 1646820649 8c:85:c2:7a:cf:8d 10.10.1.70 laptop 01:8c:85:c2:7a:cf:8d
-        "#
-            )
-            .unwrap();
-        }
+"#,
+        )
+        .await;
 
         let source_id = SourceId {
             server_id: Uuid::new_v4(),
@@ -188,7 +185,7 @@ mod tests {
             zone: Fqdn::from("home.local."),
         };
 
-        let test_server = TestServer::new(&source_id);
+        let mut test_server = TestServer::new(&source_id);
 
         let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
@@ -208,16 +205,13 @@ mod tests {
 
         assert!(!records.has_name(&name("other.home.local")));
 
-        {
-            let mut temp_file = File::create(&lease_file).unwrap();
-            writeln!(
-                temp_file,
-                r#"
+        write_file(
+            &lease_file,
+            r#"
 1646820667 64:4b:c2:7a:cd:83 10.10.1.58 other 01:64:4b:c2:7a:cd:83
-        "#
-            )
-            .unwrap();
-        }
+        "#,
+        )
+        .await;
 
         let records = test_server
             .wait_for_records(|records| records.has_name(&name("other.home.local.")))

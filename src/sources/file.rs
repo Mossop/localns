@@ -19,10 +19,10 @@ pub(crate) type FileConfig = RelativePathBuf;
 type LeaseFile = HashMap<Fqdn, RDataConfig>;
 
 #[instrument(fields(%source_id), err)]
-fn parse_file(source_id: &SourceId, lease_file: &Path) -> Result<RecordSet, Error> {
-    tracing::trace!("Parsing lease file");
+fn parse_file(source_id: &SourceId, zone_file: &Path) -> Result<RecordSet, Error> {
+    tracing::trace!("Parsing zone file");
 
-    let f = File::open(lease_file)?;
+    let f = File::open(zone_file)?;
     let leases: LeaseFile = serde_yaml::from_reader(f)?;
 
     let mut records = RecordSet::new();
@@ -36,17 +36,23 @@ fn parse_file(source_id: &SourceId, lease_file: &Path) -> Result<RecordSet, Erro
 
 struct SourceWatcher<S> {
     source_id: SourceId,
-    lease_file: PathBuf,
+    zone_file: PathBuf,
     server: S,
 }
 
 impl<S: RecordServer> WatchListener for SourceWatcher<S> {
     async fn event(&mut self, _: FileEvent) {
-        let records = parse_file(&self.source_id, &self.lease_file).unwrap_or_default();
-
-        self.server
-            .add_source_records(SourceRecords::new(&self.source_id, None, records))
-            .await;
+        match parse_file(&self.source_id, &self.zone_file) {
+            Ok(records) => {
+                self.server
+                    .add_source_records(SourceRecords::new(&self.source_id, None, records))
+                    .await
+            }
+            Err(e) => {
+                tracing::warn!(error=%e, "Failed to read zone file");
+                self.server.clear_source_records(&self.source_id).await;
+            }
+        }
     }
 }
 
@@ -64,22 +70,26 @@ impl SourceConfig for FileConfig {
         server: &S,
     ) -> Result<WatcherHandle, Error> {
         tracing::trace!("Adding source");
-        let lease_file = self.relative();
+        let zone_file = self.relative();
 
-        server
-            .add_source_records(SourceRecords::new(
-                &source_id,
-                None,
-                parse_file(&source_id, &lease_file).unwrap_or_default(),
-            ))
-            .await;
+        match parse_file(&source_id, &zone_file) {
+            Ok(records) => {
+                server
+                    .add_source_records(SourceRecords::new(&source_id, None, records))
+                    .await
+            }
+            Err(e) => {
+                tracing::warn!(error=%e, "Failed to read zone file");
+                server.clear_source_records(&source_id).await;
+            }
+        }
 
         let watcher = watch(
-            &lease_file.clone(),
+            &zone_file.clone(),
             SourceWatcher {
                 source_id: source_id.clone(),
                 server: server.clone(),
-                lease_file,
+                zone_file,
             },
         )?;
 
@@ -92,13 +102,13 @@ mod tests {
     use std::{net::Ipv4Addr, str::FromStr};
 
     use tempfile::TempDir;
-    use tokio::{fs, io::AsyncWriteExt};
+    use tokio::fs;
     use uuid::Uuid;
 
     use crate::{
         dns::{Fqdn, RData},
         sources::{file::FileConfig, SourceConfig, SourceId, SourceType},
-        test::{name, TestServer},
+        test::{name, write_file, TestServer},
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -107,18 +117,14 @@ mod tests {
 
         let zone_file = temp.path().join("zone.yml");
 
-        fs::File::create(&zone_file)
-            .await
-            .unwrap()
-            .write_all(
-                r#"
+        write_file(
+            &zone_file,
+            r#"
 www.home.local: 10.14.23.123
 other.home.local: www.home.local
-"#
-                .as_bytes(),
-            )
-            .await
-            .unwrap();
+"#,
+        )
+        .await;
 
         let source_id = SourceId {
             server_id: Uuid::new_v4(),
@@ -128,7 +134,7 @@ other.home.local: www.home.local
 
         let config = FileConfig::from(zone_file.as_path());
 
-        let test_server = TestServer::new(&source_id);
+        let mut test_server = TestServer::new(&source_id);
 
         let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
@@ -146,17 +152,13 @@ other.home.local: www.home.local
             &RData::Cname(Fqdn::from("www.home.local"))
         ));
 
-        fs::File::create(&zone_file)
-            .await
-            .unwrap()
-            .write_all(
-                r#"
+        write_file(
+            &zone_file,
+            r#"
 www.home.local: 10.14.23.123
-"#
-                .as_bytes(),
-            )
-            .await
-            .unwrap();
+"#,
+        )
+        .await;
 
         let records = test_server
             .wait_for_records(|records| !records.has_name(&name("other.home.local.")))
@@ -168,5 +170,10 @@ www.home.local: 10.14.23.123
             &Fqdn::from("www.home.local"),
             &RData::A(Ipv4Addr::from_str("10.14.23.123").unwrap())
         ));
+
+        fs::remove_file(&zone_file).await.unwrap();
+
+        let records = test_server.wait_for_maybe_records(Option::is_none).await;
+        assert_eq!(records, None);
     }
 }

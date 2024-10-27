@@ -276,7 +276,7 @@ mod tests {
     use crate::{
         dns::{Fqdn, RData, RDataConfig},
         sources::{traefik::TraefikConfig, SourceConfig, SourceId, SourceType},
-        test::{traefik_container, TestServer},
+        test::{name, traefik_container, TestServer},
     };
 
     #[test]
@@ -357,7 +357,7 @@ mod tests {
 
     #[tokio::test]
     async fn integration() {
-        let (_handle, test_server) = {
+        let (_handle, mut test_server) = {
             let traefik = traefik_container(
                 r#"http:
   routers:
@@ -389,13 +389,13 @@ mod tests {
                 interval_ms: Some(100),
             };
 
-            let test_server = TestServer::new(&source_id);
+            let mut test_server = TestServer::new(&source_id);
 
             let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
-            test_server.wait_for_change().await;
-
-            let records = test_server.records().await.unwrap();
+            let records = test_server
+                .wait_for_records(|records| records.has_name(&name("test.example.org.")))
+                .await;
 
             assert!(records.contains(
                 &Fqdn::from("test.example.org"),
@@ -408,13 +408,13 @@ mod tests {
                 interval_ms: Some(100),
             };
 
-            let test_server = TestServer::new(&source_id);
+            let mut test_server = TestServer::new(&source_id);
 
             let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
-            test_server.wait_for_change().await;
-
-            let records = test_server.records().await.unwrap();
+            let records = test_server
+                .wait_for_records(|records| records.has_name(&name("test.example.org.")))
+                .await;
 
             assert!(records.contains(
                 &Fqdn::from("test.example.org"),
@@ -424,9 +424,7 @@ mod tests {
             (handle, test_server)
         };
 
-        test_server.wait_for_change().await;
-
-        let records = test_server.records().await;
+        let records = test_server.wait_for_maybe_records(Option::is_none).await;
 
         assert_eq!(records, None);
     }

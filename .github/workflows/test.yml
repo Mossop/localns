@@ -19,7 +19,6 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
@@ -32,25 +31,22 @@ jobs:
           components: llvm-tools
 
       - name: Install helpers
-        run: cargo install cargo-binutils && sudo apt install jq
+        run: sudo apt install kcov
 
       - name: Cargo check
         run: cargo check --all-features
 
       - name: Run tests
-        run: cargo test --all-features
         env:
-          RUSTFLAGS: "-C instrument-coverage"
-
-      - name: Merge profiling reports
-        run: rust-profdata merge -sparse default_*.profraw -o localns.profdata
-
-      - name: Export profiling data
-        run: ./cov_wrapper.sh export --instr-profile=localns.profdata --format=lcov --sources src >coverage.txt
+          CARGO_INCREMENTAL: 0
+          RUSTFLAGS: "-C link-dead-code"
+        run: |
+          cargo clean
+          cargo test --all-features --no-run
+          for file in target/debug/deps/localns-*; do [ -x "${file}" ] || continue; mkdir -p "target/cov/$(basename $file)"; kcov --exclude-pattern=~/.cargo --verify "target/cov/$(basename $file)" "$file"; done
 
       - uses: codecov/codecov-action@v4
         with:
-          files: ./coverage1.txt
           token: ${{ secrets.CODECOV_TOKEN }}
           verbose: true
 
@@ -66,7 +62,6 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
@@ -83,3 +78,6 @@ jobs:
 
       - name: Rustfmt
         run: cargo fmt --check
+
+      - name: Check for unused dependencies
+        uses: bnjbvr/cargo-machete@main

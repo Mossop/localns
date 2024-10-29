@@ -7,10 +7,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_plain::derive_display_from_serialize;
 use tokio::task::JoinHandle;
+use uuid::Uuid;
 
-use crate::{
-    config::Config, dns::RecordSet, watcher::Watcher, Error, RecordServer, Server, ServerId,
-};
+use crate::{config::Config, dns::RecordSet, watcher::Watcher, Error, RecordServer, ServerId};
 
 mod dhcp;
 mod docker;
@@ -131,23 +130,32 @@ pub(crate) struct SourcesConfig {
     pub remote: HashMap<String, remote::RemoteConfig>,
 }
 
-#[derive(Default)]
 pub(crate) struct Sources {
+    server_id: Uuid,
     sources: HashMap<SourceId, Box<dyn SourceHandle>>,
 }
 
 impl Sources {
-    async fn add_sources<C>(
+    pub(crate) fn new() -> Self {
+        Self {
+            server_id: Uuid::new_v4(),
+            sources: HashMap::new(),
+        }
+    }
+
+    async fn add_sources<C, R>(
         &mut self,
         sources: HashMap<String, C>,
         old_sources: Option<&HashMap<String, C>>,
-        server: &Server,
+        server: &R,
         seen_sources: &mut HashSet<SourceId>,
     ) where
         C: SourceConfig,
+        R: RecordServer,
     {
         for (name, source_config) in sources {
-            let source_id = SourceId::new(&server.id, C::source_type(), &name);
+            tracing::debug!(name, source_type=%C::source_type(), "Adding source");
+            let source_id = SourceId::new(&self.server_id, C::source_type(), &name);
             let previous = old_sources.and_then(|c| c.get(&name));
 
             seen_sources.insert(source_id.clone());
@@ -167,12 +175,14 @@ impl Sources {
         }
     }
 
-    pub(crate) async fn install_sources(
+    pub(crate) async fn install_sources<R>(
         &mut self,
-        server: &Server,
+        server: &R,
         config: Config,
         old_config: Option<&Config>,
-    ) {
+    ) where
+        R: RecordServer,
+    {
         let mut seen_sources: HashSet<SourceId> = HashSet::new();
 
         // DHCP is assumed to not need any additional resolution.
@@ -220,23 +230,212 @@ impl Sources {
         )
         .await;
 
-        let records = {
-            let mut inner = server.inner.lock().await;
+        let all = self.sources.keys().cloned().collect::<HashSet<SourceId>>();
+        for old in all.difference(&seen_sources) {
+            self.sources.remove(old);
+        }
 
-            let all = self.sources.keys().cloned().collect::<HashSet<SourceId>>();
-            for old in all.difference(&seen_sources) {
-                self.sources.remove(old);
-                inner.records.remove(old);
-            }
-
-            inner.records()
-        };
-
-        let mut server_state = server.server_state.write().await;
-        server_state.records = records;
+        server.prune_sources(&seen_sources).await;
     }
 
     pub(crate) async fn shutdown(&mut self) {
         self.sources.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{net::Ipv4Addr, str::FromStr};
+
+    use tempfile::TempDir;
+
+    use crate::{
+        config::Config,
+        dns::{Fqdn, RData},
+        sources::{SourceId, SourceType, Sources},
+        test::{name, write_file, MultiSourceServer},
+    };
+
+    #[tracing_test::traced_test]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn integration() {
+        let temp = TempDir::new().unwrap();
+        let config_file = temp.path().join("config.yml");
+        write_file(
+            &config_file,
+            r#"
+sources:
+  file:
+    test_file: zone1.yml
+"#,
+        )
+        .await;
+
+        let zone_1 = temp.path().join("zone1.yml");
+        write_file(
+            &zone_1,
+            r#"
+home.test.local: 10.45.23.56
+www.test.local: home.test.local
+"#,
+        )
+        .await;
+
+        let zone_2 = temp.path().join("zone2.yml");
+        write_file(
+            &zone_2,
+            r#"
+home.other.local: 10.45.23.57
+www.other.local: home.other.local
+test.other.local: home.test.local
+"#,
+        )
+        .await;
+
+        let zone_3 = temp.path().join("zone3.yml");
+        write_file(
+            &zone_3,
+            r#"
+foo.baz.local: home.other.local
+"#,
+        )
+        .await;
+
+        let mut sources = Sources::new();
+        let mut test_server = MultiSourceServer::new();
+
+        let source_id_1 = SourceId::new(&sources.server_id, SourceType::File, "test_file");
+        let source_id_2 = SourceId::new(&sources.server_id, SourceType::File, "other_file");
+        let source_id_3 = SourceId::new(&sources.server_id, SourceType::File, "new_file");
+
+        let config_1 = Config::from_file(&config_file).unwrap();
+
+        sources
+            .install_sources(&test_server, config_1.clone(), None)
+            .await;
+
+        let record_map = test_server
+            .wait_for_records(|records| records.has_name(&name("home.test.local.")))
+            .await;
+
+        assert_eq!(record_map.len(), 1);
+        assert!(record_map.contains_key(&source_id_1));
+
+        let records = record_map.get(&source_id_1).unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(records.contains(
+            &Fqdn::from("home.test.local"),
+            &RData::A(Ipv4Addr::from_str("10.45.23.56").unwrap())
+        ));
+        assert!(records.contains(
+            &Fqdn::from("www.test.local"),
+            &RData::Cname(Fqdn::from("home.test.local"))
+        ));
+
+        write_file(
+            &config_file,
+            r#"
+sources:
+  file:
+    test_file: zone1.yml
+    other_file: zone2.yml
+"#,
+        )
+        .await;
+
+        let config_2 = Config::from_file(&config_file).unwrap();
+        sources
+            .install_sources(&test_server, config_2.clone(), Some(&config_1))
+            .await;
+
+        let record_map = test_server
+            .wait_for_records(|records| records.has_name(&name("www.other.local.")))
+            .await;
+
+        assert_eq!(record_map.len(), 2);
+        assert!(record_map.contains_key(&source_id_1));
+        assert!(record_map.contains_key(&source_id_2));
+
+        let records = record_map.get(&source_id_1).unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(records.contains(
+            &Fqdn::from("home.test.local"),
+            &RData::A(Ipv4Addr::from_str("10.45.23.56").unwrap())
+        ));
+        assert!(records.contains(
+            &Fqdn::from("www.test.local"),
+            &RData::Cname(Fqdn::from("home.test.local"))
+        ));
+
+        let records = record_map.get(&source_id_2).unwrap();
+        assert_eq!(records.len(), 3);
+        assert!(records.contains(
+            &Fqdn::from("home.other.local"),
+            &RData::A(Ipv4Addr::from_str("10.45.23.57").unwrap())
+        ));
+        assert!(records.contains(
+            &Fqdn::from("www.other.local"),
+            &RData::Cname(Fqdn::from("home.other.local"))
+        ));
+        assert!(records.contains(
+            &Fqdn::from("test.other.local"),
+            &RData::Cname(Fqdn::from("home.test.local"))
+        ));
+
+        write_file(
+            &config_file,
+            r#"
+sources:
+  file:
+    other_file: zone2.yml
+    new_file: zone3.yml
+"#,
+        )
+        .await;
+
+        let config_3 = Config::from_file(&config_file).unwrap();
+        sources
+            .install_sources(&test_server, config_3.clone(), Some(&config_2))
+            .await;
+
+        let record_map = test_server
+            .wait_for_records(|records| records.has_name(&name("foo.baz.local.")))
+            .await;
+
+        assert_eq!(record_map.len(), 2);
+        assert!(record_map.contains_key(&source_id_2));
+        assert!(record_map.contains_key(&source_id_3));
+
+        let records = record_map.get(&source_id_2).unwrap();
+        assert_eq!(records.len(), 3);
+        assert!(records.contains(
+            &Fqdn::from("home.other.local"),
+            &RData::A(Ipv4Addr::from_str("10.45.23.57").unwrap())
+        ));
+        assert!(records.contains(
+            &Fqdn::from("www.other.local"),
+            &RData::Cname(Fqdn::from("home.other.local"))
+        ));
+        assert!(records.contains(
+            &Fqdn::from("test.other.local"),
+            &RData::Cname(Fqdn::from("home.test.local"))
+        ));
+
+        let records = record_map.get(&source_id_3).unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(records.contains(
+            &Fqdn::from("foo.baz.local"),
+            &RData::Cname(Fqdn::from("home.other.local"))
+        ));
+
+        write_file(&config_file, "").await;
+        let config_4 = Config::from_file(&config_file).unwrap();
+        sources
+            .install_sources(&test_server, config_4.clone(), Some(&config_3))
+            .await;
+
+        let state = test_server.wait_for_change().await;
+        assert!(state.is_empty());
+        assert!(sources.sources.is_empty());
     }
 }

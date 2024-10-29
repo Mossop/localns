@@ -10,7 +10,7 @@ mod util;
 mod watcher;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::Future,
     mem,
     path::{Path, PathBuf},
@@ -82,11 +82,12 @@ where
     fn add_source_records(&self, new_records: SourceRecords) -> impl Future<Output = ()> + Send;
 
     fn clear_source_records(&self, source_id: &SourceId) -> impl Future<Output = ()> + Send;
+
+    async fn prune_sources(&self, keep: &HashSet<SourceId>);
 }
 
 #[derive(Clone)]
 pub struct Server {
-    id: ServerId,
     inner: Arc<Mutex<ServerInner>>,
     sources: Arc<Mutex<Sources>>,
     server_state: Arc<RwLock<ServerState<Zones>>>,
@@ -121,12 +122,11 @@ impl Server {
         }));
 
         let server = Self {
-            id: ServerId::new_v4(),
             inner: Arc::new(Mutex::new(ServerInner {
                 config: config.clone(),
                 records: HashMap::new(),
             })),
-            sources: Default::default(),
+            sources: Arc::new(Mutex::new(Sources::new())),
             dns_server: Arc::new(Mutex::new(
                 DnsServer::new(&config.server, server_state.clone()).await,
             )),
@@ -270,5 +270,21 @@ impl RecordServer for Server {
                 server_state.records = records;
             }
         }
+    }
+
+    async fn prune_sources(&self, keep: &HashSet<SourceId>) {
+        let records = {
+            let mut inner = self.inner.lock().await;
+
+            let all = inner.records.keys().cloned().collect::<HashSet<SourceId>>();
+            for old in all.difference(keep) {
+                inner.records.remove(old);
+            }
+
+            inner.records()
+        };
+
+        let mut server_state = self.server_state.write().await;
+        server_state.records = records;
     }
 }

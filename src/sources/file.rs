@@ -108,7 +108,7 @@ mod tests {
     use crate::{
         dns::{Fqdn, RData},
         sources::{file::FileConfig, SourceConfig, SourceId, SourceType},
-        test::{name, write_file, TestServer},
+        test::{name, write_file, SingleSourceServer},
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -134,13 +134,15 @@ other.home.local: www.home.local
 
         let config = FileConfig::from(zone_file.as_path());
 
-        let mut test_server = TestServer::new(&source_id);
+        let mut test_server = SingleSourceServer::new(&source_id);
 
         let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
         let records = test_server
             .wait_for_records(|records| records.has_name(&name("www.home.local.")))
             .await;
+
+        assert_eq!(records.len(), 2);
 
         assert!(records.contains(
             &Fqdn::from("www.home.local"),
@@ -164,6 +166,8 @@ www.home.local: 10.14.23.123
             .wait_for_records(|records| !records.has_name(&name("other.home.local.")))
             .await;
 
+        assert_eq!(records.len(), 1);
+
         assert!(!records.has_name(&name("other.home.local")));
 
         assert!(records.contains(
@@ -173,7 +177,7 @@ www.home.local: 10.14.23.123
 
         fs::remove_file(&zone_file).await.unwrap();
 
-        let records = test_server.wait_for_maybe_records(Option::is_none).await;
+        let records = test_server.wait_for_maybe_records(|o| o.is_none()).await;
         assert_eq!(records, None);
     }
 }

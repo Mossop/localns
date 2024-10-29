@@ -118,7 +118,7 @@ mod tests {
     use crate::{
         dns::{Fqdn, RData},
         sources::{dhcp::DhcpConfig, SourceConfig, SourceId, SourceType},
-        test::{name, write_file, TestServer},
+        test::{name, write_file, SingleSourceServer},
     };
 
     #[test]
@@ -137,6 +137,8 @@ mod tests {
 1646820846 74:d4:8c:85:c2:7a 10.10.15.230 mandelbrot ff:56:50:4d:98:00:02:00:00:ab:11:31:cd:b5:50:8c:85:c2:7a
         "#,
         );
+
+        assert_eq!(records.len(), 7);
 
         assert!(records.contains(
             &Fqdn::from("mandelbrot.home.local"),
@@ -185,13 +187,15 @@ mod tests {
             zone: Fqdn::from("home.local."),
         };
 
-        let mut test_server = TestServer::new(&source_id);
+        let mut test_server = SingleSourceServer::new(&source_id);
 
         let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
         let records = test_server
             .wait_for_records(|records| records.has_name(&name("caldigit.home.local.")))
             .await;
+
+        assert_eq!(records.len(), 2);
 
         assert!(records.contains(
             &Fqdn::from("caldigit.home.local"),
@@ -216,6 +220,8 @@ mod tests {
         let records = test_server
             .wait_for_records(|records| records.has_name(&name("other.home.local.")))
             .await;
+
+        assert_eq!(records.len(), 1);
 
         assert!(!records.has_name(&name("caldigit.home.local.")));
 

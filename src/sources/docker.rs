@@ -23,9 +23,6 @@ use crate::{
 };
 
 #[derive(Debug, PartialEq, Deserialize, Clone)]
-pub(crate) struct DockerLocal {}
-
-#[derive(Debug, PartialEq, Deserialize, Clone)]
 pub(crate) struct DockerTls {
     pub address: Address,
     pub private_key: RelativePathBuf,
@@ -38,7 +35,7 @@ pub(crate) struct DockerTls {
 pub(crate) enum DockerConfig {
     Address(String),
     Tls(Box<DockerTls>),
-    Local(DockerLocal),
+    Local,
 }
 
 type Labels = HashMap<String, String>;
@@ -165,7 +162,7 @@ fn connect(source_id: &SourceId, docker_config: &DockerConfig) -> Result<Docker,
                 Docker::connect_with_local(address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)?
             }
         }
-        DockerConfig::Local(_) => {
+        DockerConfig::Local => {
             tracing::trace!("Attempting to connect to local docker daemon");
 
             Docker::connect_with_local_defaults()?

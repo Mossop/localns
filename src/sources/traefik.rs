@@ -276,7 +276,7 @@ mod tests {
     use crate::{
         dns::{Fqdn, RData, RDataConfig},
         sources::{traefik::TraefikConfig, SourceConfig, SourceId, SourceType},
-        test::{name, traefik_container, TestServer},
+        test::{name, traefik_container, SingleSourceServer},
     };
 
     #[test]
@@ -389,13 +389,15 @@ mod tests {
                 interval_ms: Some(100),
             };
 
-            let mut test_server = TestServer::new(&source_id);
+            let mut test_server = SingleSourceServer::new(&source_id);
 
             let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
             let records = test_server
                 .wait_for_records(|records| records.has_name(&name("test.example.org.")))
                 .await;
+
+            assert_eq!(records.len(), 1);
 
             assert!(records.contains(
                 &Fqdn::from("test.example.org"),
@@ -408,7 +410,7 @@ mod tests {
                 interval_ms: Some(100),
             };
 
-            let mut test_server = TestServer::new(&source_id);
+            let mut test_server = SingleSourceServer::new(&source_id);
 
             let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
@@ -416,15 +418,22 @@ mod tests {
                 .wait_for_records(|records| records.has_name(&name("test.example.org.")))
                 .await;
 
+            assert_eq!(records.len(), 2);
+
             assert!(records.contains(
                 &Fqdn::from("test.example.org"),
+                &RData::A("10.10.15.23".parse().unwrap())
+            ));
+
+            assert!(records.contains(
+                &Fqdn::from("localhost"),
                 &RData::A("10.10.15.23".parse().unwrap())
             ));
 
             (handle, test_server)
         };
 
-        let records = test_server.wait_for_maybe_records(Option::is_none).await;
+        let records = test_server.wait_for_maybe_records(|o| o.is_none()).await;
 
         assert_eq!(records, None);
     }

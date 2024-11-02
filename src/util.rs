@@ -1,56 +1,13 @@
 use std::{
     fmt::{self, Display},
     hash::Hash,
-    net::{AddrParseError, IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     str::FromStr,
 };
 
 use serde::Deserialize;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) enum Host {
-    Ipv4(Ipv4Addr),
-    Ipv6(Ipv6Addr),
-}
-
-impl Display for Host {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Host::Ipv4(ip) => f.pad(&ip.to_string()),
-            Host::Ipv6(ip) => f.pad(&ip.to_string()),
-        }
-    }
-}
-
-impl TryFrom<&str> for Host {
-    type Error = <IpAddr as FromStr>::Err;
-
-    fn try_from(host: &str) -> Result<Self, Self::Error> {
-        let ip = IpAddr::from_str(host)?;
-        Ok(ip.into())
-    }
-}
-
-impl From<Ipv4Addr> for Host {
-    fn from(ip: Ipv4Addr) -> Self {
-        Host::Ipv4(ip)
-    }
-}
-
-impl From<Ipv6Addr> for Host {
-    fn from(ip: Ipv6Addr) -> Self {
-        Host::Ipv6(ip)
-    }
-}
-
-impl From<IpAddr> for Host {
-    fn from(ip: IpAddr) -> Self {
-        match ip {
-            IpAddr::V4(ip) => ip.into(),
-            IpAddr::V6(ip) => ip.into(),
-        }
-    }
-}
+pub(crate) type Host = IpAddr;
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Hash)]
 #[serde(try_from = "String")]
@@ -64,15 +21,8 @@ impl Address {
         format!("{}:{}", self.host, self.port.unwrap_or(default_port))
     }
 
-    pub(crate) fn to_socket_address(
-        &self,
-        default_port: u16,
-    ) -> Result<SocketAddr, AddrParseError> {
-        SocketAddr::from_str(&format!(
-            "{}:{}",
-            self.host,
-            self.port.unwrap_or(default_port)
-        ))
+    pub(crate) fn to_socket_address(&self, default_port: u16) -> SocketAddr {
+        SocketAddr::new(self.host, self.port.unwrap_or(default_port))
     }
 }
 
@@ -92,7 +42,7 @@ impl TryFrom<String> for Address {
     fn try_from(host: String) -> Result<Self, Self::Error> {
         match SocketAddr::from_str(&host) {
             Ok(addr) => Ok(Self {
-                host: addr.ip().into(),
+                host: addr.ip(),
                 port: Some(addr.port()),
             }),
             Err(e) => {

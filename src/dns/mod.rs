@@ -1,10 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use hickory_server::{
-    proto::{
-        op::ResponseCode,
-        rr::{self, Name},
-    },
+    proto::rr::{self, Name},
     ServerFuture,
 };
 use serde::Deserialize;
@@ -79,21 +76,19 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
 
         let records: Vec<rr::Record> = self
             .records
-            .lookup(
-                name,
-                query_state.query_class(),
-                query_state.query_type(),
-                query_state.recursion_desired,
-            )
+            .lookup(name, query_state.query_class(), query_state.query_type())
             .filter_map(|r| r.raw(&config))
             .collect();
+
+        if !config.upstreams.is_empty() && name == query_state.query.name() {
+            query_state.recursion_available = true;
+        }
 
         if !records.is_empty() {
             query_state.add_answers(records);
 
             if name == query_state.query.name() {
                 query_state.soa = config.soa();
-                query_state.response_code = ResponseCode::NoError;
             }
 
             return;
@@ -229,15 +224,7 @@ mod tests {
             .await;
         server_state.perform_query(&mut query_state).await;
 
-        // No recursion will not return the CNAME record.
         assert_eq!(query_state.response_code, ResponseCode::NXDomain);
-        assert!(query_state.answers().is_empty());
-        assert!(query_state.additionals().is_empty());
-
-        let mut query_state = QueryState::new(query.clone(), true);
-        server_state.perform_query(&mut query_state).await;
-
-        assert_eq!(query_state.response_code, ResponseCode::NoError);
         let mut answers = query_state.answers().clone();
         answers.sort();
         assert_eq!(answers.len(), 1);

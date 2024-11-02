@@ -56,13 +56,7 @@ impl Upstream {
         query_class: DNSClass,
         query_type: RecordType,
     ) -> Option<DnsResponse> {
-        let address = match self.config.to_socket_address(53) {
-            Ok(addr) => addr,
-            Err(e) => {
-                tracing::error!(error = %e, "Unable to lookup nameserver");
-                return None;
-            }
-        };
+        let address = self.config.to_socket_address(53);
 
         let mut client = match connect_client(address).await {
             Ok(c) => c,
@@ -98,9 +92,6 @@ impl Upstream {
             query_state.add_additionals(message.take_additionals());
 
             if name == query_state.query.name() {
-                query_state.response_code = message.response_code();
-                query_state.recursion_available = message.recursion_available();
-
                 let mut name_servers: Vec<rr::Record> = Vec::new();
                 let mut soa: Option<rr::Record> = None;
 
@@ -121,6 +112,8 @@ impl Upstream {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use hickory_client::{
         op::{Query, ResponseCode},
         rr::{DNSClass, RecordType},
@@ -150,7 +143,7 @@ data    IN CNAME www
         .await;
 
         let upstream = Upstream::from(Address {
-            host: Host::try_from("127.0.0.1").unwrap(),
+            host: Host::from_str("127.0.0.1").unwrap(),
             port: Some(coredns.get_udp_port(53).await),
         });
 

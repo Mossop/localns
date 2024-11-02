@@ -71,25 +71,23 @@ impl QueryState {
     }
 
     fn add_unknowns(&mut self, record: &rr::Record) {
-        if self.recursion_desired {
-            if let Some(rr::RData::CNAME(ref name)) = record.data() {
-                if !self.seen.contains(name) {
-                    self.seen.insert(name.0.clone());
-                    self.unknowns.insert(name.0.clone());
-                }
+        if let Some(rr::RData::CNAME(ref name)) = record.data() {
+            if !self.seen.contains(name) {
+                self.seen.insert(name.0.clone());
+                self.unknowns.insert(name.0.clone());
             }
         }
     }
 
     pub(super) fn add_answers(&mut self, records: Vec<rr::Record>) {
-        if !records.is_empty() && self.response_code == ResponseCode::NXDomain {
-            self.response_code = ResponseCode::NoError;
-        }
-
         for record in &records {
             self.seen.insert(record.name().clone());
             self.unknowns.remove(record.name());
             self.add_unknowns(record);
+
+            if record.record_type() == self.query.query_type() {
+                self.response_code = ResponseCode::NoError;
+            }
         }
 
         self.answers.extend(records);

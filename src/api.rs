@@ -1,28 +1,24 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use actix_web::{dev, get, web, App, HttpServer, Responder};
 use serde::Deserialize;
+use tokio::sync::RwLock;
 
-use crate::{
-    dns::{Record, RecordSource},
-    Server,
-};
+use crate::dns::{Record, RecordSet, RecordSource};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub(crate) struct ApiConfig {
-    address: SocketAddr,
+    pub(crate) address: SocketAddr,
 }
 
-type AppData = Server;
+type AppData = Arc<RwLock<RecordSet>>;
 
 #[get("/records")]
 async fn records(server: web::Data<AppData>) -> impl Responder {
     let records: Vec<Record> = {
         server
-            .server_state
             .read()
             .await
-            .records
             .records()
             .filter(|r| r.source == RecordSource::Local)
             .cloned()
@@ -58,8 +54,8 @@ pub(crate) struct ApiServer {
 }
 
 impl ApiServer {
-    pub(crate) fn new(config: &ApiConfig, server: Server) -> Option<Self> {
-        create_server(config, server).map(|api_server| {
+    pub(crate) fn new(config: &ApiConfig, data: AppData) -> Option<Self> {
+        create_server(config, data).map(|api_server| {
             let handle = api_server.handle();
             tokio::spawn(api_server);
 

@@ -36,7 +36,7 @@ impl MultiSourceServer {
     }
 
     pub(crate) async fn wait_for_change(&mut self) -> HashMap<SourceId, RecordSet> {
-        match timeout(Duration::from_secs(2), self.receiver.changed()).await {
+        match timeout(Duration::from_secs(20), self.receiver.changed()).await {
             Ok(Ok(())) => {}
             Ok(Err(_)) => panic!("Record stream closed"),
             Err(_) => panic!("Timed out waiting for new records"),

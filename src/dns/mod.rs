@@ -36,11 +36,42 @@ pub(crate) struct ServerConfig {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ServerState<Z> {
+    pub(crate) records: Arc<RwLock<RecordSet>>,
+    pub(crate) zones: Arc<RwLock<Z>>,
+}
+
+pub(crate) struct LockedServerState<Z> {
     pub(crate) records: RecordSet,
     pub(crate) zones: Z,
 }
 
-impl<Z: ZoneConfigProvider> ServerState<Z> {
+impl<Z: Clone> ServerState<Z> {
+    pub(crate) fn new(records: RecordSet, zones: Z) -> Self {
+        Self {
+            records: Arc::new(RwLock::new(records)),
+            zones: Arc::new(RwLock::new(zones)),
+        }
+    }
+
+    pub(crate) async fn replace_records(&self, records: RecordSet) {
+        let mut locked = self.records.write().await;
+        *locked = records;
+    }
+
+    pub(crate) async fn replace_zones(&self, zones: Z) {
+        let mut locked = self.zones.write().await;
+        *locked = zones;
+    }
+
+    pub(crate) async fn locked(&self) -> LockedServerState<Z> {
+        let zones = self.zones.read().await.clone();
+        let records = self.records.read().await.clone();
+
+        LockedServerState { zones, records }
+    }
+}
+
+impl<Z: ZoneConfigProvider> LockedServerState<Z> {
     async fn lookup_name(&self, name: &Name, query_state: &mut QueryState) {
         let fqdn = Fqdn::from(name.clone());
         let config = self.zones.zone_config(&fqdn);
@@ -97,14 +128,14 @@ impl<Z: ZoneConfigProvider> ServerState<Z> {
 }
 
 pub(crate) struct DnsServer {
-    server_state: Arc<RwLock<ServerState<Zones>>>,
+    server_state: ServerState<Zones>,
     server: ServerFuture<Handler>,
 }
 
 impl DnsServer {
     pub(crate) async fn new(
         server_config: &ServerConfig,
-        server_state: Arc<RwLock<ServerState<Zones>>>,
+        server_state: ServerState<Zones>,
     ) -> Self {
         Self {
             server_state: server_state.clone(),
@@ -132,7 +163,7 @@ impl DnsServer {
 
     async fn build_server(
         server_config: &ServerConfig,
-        server_state: Arc<RwLock<ServerState<Zones>>>,
+        server_state: ServerState<Zones>,
     ) -> ServerFuture<Handler> {
         let handler = Handler { server_state };
 
@@ -173,6 +204,7 @@ mod tests {
         test::{name, rdata_a, rdata_cname},
     };
 
+    #[derive(Clone)]
     struct EmptyZones {}
 
     impl ZoneConfigProvider for EmptyZones {
@@ -192,10 +224,9 @@ mod tests {
         let query = Query::query(name("test.home.local."), RecordType::A);
 
         let mut query_state = QueryState::new(query.clone(), false);
-        let mut server_state = ServerState {
-            records: records.clone(),
-            zones: EmptyZones {},
-        };
+        let mut server_state = ServerState::new(records.clone(), EmptyZones {})
+            .locked()
+            .await;
         server_state.perform_query(&mut query_state).await;
 
         // No recursion will not return the CNAME record.

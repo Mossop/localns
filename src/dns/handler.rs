@@ -1,11 +1,8 @@
-use std::sync::Arc;
-
 use hickory_client::op::{Edns, Header, MessageType, OpCode, ResponseCode};
 use hickory_server::{
     authority::MessageResponseBuilder,
     server::{Request, RequestHandler, ResponseHandler, ResponseInfo},
 };
-use tokio::sync::RwLock;
 use tracing::instrument;
 
 use crate::{
@@ -21,14 +18,7 @@ fn serve_failed() -> ResponseInfo {
 
 #[derive(Clone)]
 pub(crate) struct Handler {
-    pub server_state: Arc<RwLock<ServerState<Zones>>>,
-}
-
-impl Handler {
-    async fn server_state(&self) -> ServerState<Zones> {
-        let server = self.server_state.read().await;
-        server.clone()
-    }
+    pub server_state: ServerState<Zones>,
 }
 
 #[async_trait::async_trait]
@@ -85,7 +75,7 @@ impl RequestHandler for Handler {
         let result = match request.message_type() {
             MessageType::Query => match request.op_code() {
                 OpCode::Query => {
-                    let server_state = self.server_state().await;
+                    let server_state = self.server_state.locked().await;
                     let mut query_state = QueryState::new(
                         request.query().original().clone(),
                         request.recursion_desired(),

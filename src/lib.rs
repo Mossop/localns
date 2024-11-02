@@ -18,7 +18,7 @@ use std::{
 };
 
 pub use anyhow::Error;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
@@ -90,7 +90,7 @@ where
 pub struct Server {
     inner: Arc<Mutex<ServerInner>>,
     sources: Arc<Mutex<Sources>>,
-    server_state: Arc<RwLock<ServerState<Zones>>>,
+    server_state: ServerState<Zones>,
     dns_server: Arc<Mutex<DnsServer>>,
     config_watcher: LockedOption<Watcher>,
     api_server: LockedOption<ApiServer>,
@@ -116,10 +116,8 @@ impl Server {
     pub async fn new(config_path: &Path) -> Result<Self, Error> {
         let config = Config::from_file(config_path)?;
 
-        let server_state = Arc::new(RwLock::new(ServerState {
-            zones: config.zones.clone(),
-            records: RecordSet::new(),
-        }));
+        let server_state = ServerState::new(RecordSet::new(), config.zones.clone());
+        let records = server_state.records.clone();
 
         let server = Self {
             inner: Arc::new(Mutex::new(ServerInner {
@@ -138,7 +136,7 @@ impl Server {
         if let Some(api_server) = config
             .api
             .as_ref()
-            .and_then(|api_config| ApiServer::new(api_config, server.clone()))
+            .and_then(|api_config| ApiServer::new(api_config, records))
         {
             server.api_server.replace(api_server).await;
         }
@@ -188,7 +186,6 @@ impl Server {
 
     async fn update_config(&self, config: Config) {
         let (restart_server, restart_api_server, old_config) = {
-            let mut server_state = self.server_state.write().await;
             let mut inner = self.inner.lock().await;
 
             let restart_server = inner.config.server != config.server;
@@ -196,7 +193,7 @@ impl Server {
 
             let mut old_config = config.clone();
             mem::swap(&mut inner.config, &mut old_config);
-            server_state.zones = config.zones.clone();
+            self.server_state.replace_zones(config.zones.clone()).await;
 
             (restart_server, restart_api_server, old_config)
         };
@@ -218,11 +215,9 @@ impl Server {
                 old_server.shutdown().await;
             }
 
-            if let Some(api_server) = config
-                .api
-                .as_ref()
-                .and_then(|api_config| ApiServer::new(api_config, self.clone()))
-            {
+            if let Some(api_server) = config.api.as_ref().and_then(|api_config| {
+                ApiServer::new(api_config, self.server_state.records.clone())
+            }) {
                 self.api_server.replace(api_server).await;
             }
         }
@@ -255,8 +250,7 @@ impl RecordServer for Server {
 
         if changed {
             let records = inner.records();
-            let mut server_state = self.server_state.write().await;
-            server_state.records = records;
+            self.server_state.replace_records(records).await;
         }
     }
 
@@ -266,8 +260,7 @@ impl RecordServer for Server {
         if let Some(old) = inner.records.remove(source_id) {
             if !old.records.is_empty() {
                 let records = inner.records();
-                let mut server_state = self.server_state.write().await;
-                server_state.records = records;
+                self.server_state.replace_records(records).await;
             }
         }
     }
@@ -284,7 +277,6 @@ impl RecordServer for Server {
             inner.records()
         };
 
-        let mut server_state = self.server_state.write().await;
-        server_state.records = records;
+        self.server_state.replace_records(records).await;
     }
 }

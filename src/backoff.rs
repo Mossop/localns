@@ -30,6 +30,12 @@ impl Backoff {
 }
 
 impl Default for Backoff {
+    #[cfg(test)]
+    fn default() -> Self {
+        Backoff::new(100, 1.0, 100)
+    }
+
+    #[cfg(not(test))]
     fn default() -> Self {
         Backoff::new(1000, 1.2, 30000)
     }

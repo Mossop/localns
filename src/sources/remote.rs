@@ -13,10 +13,14 @@ use crate::{
     Error, RecordServer, SourceRecords,
 };
 
+const POLL_INTERVAL_MS: u64 = 15000;
+
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub(crate) struct RemoteConfig {
     #[serde(deserialize_with = "deserialize_url")]
     url: Url,
+    #[serde(default)]
+    interval_ms: Option<u64>,
 }
 
 enum LoopResult {
@@ -88,7 +92,10 @@ async fn remote_loop<S: RecordServer>(
                 .await;
         }
 
-        sleep(Duration::from_secs(30)).await;
+        sleep(Duration::from_millis(
+            remote_config.interval_ms.unwrap_or(POLL_INTERVAL_MS),
+        ))
+        .await;
     }
 }
 
@@ -129,5 +136,109 @@ impl SourceConfig for RemoteConfig {
         };
 
         Ok(SpawnHandle { handle })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        net::{Ipv4Addr, SocketAddr},
+        str::FromStr,
+        sync::Arc,
+    };
+
+    use tokio::sync::RwLock;
+    use uuid::Uuid;
+
+    use crate::{
+        api::{ApiConfig, ApiServer},
+        dns::{Fqdn, RData, Record, RecordSet},
+        sources::{remote::RemoteConfig, SourceConfig, SourceId},
+        test::{name, SingleSourceServer},
+    };
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn integration() {
+        let mut api_records = RecordSet::default();
+        api_records.insert(Record::new(
+            "www.test.local".into(),
+            RData::A(Ipv4Addr::from_str("10.5.23.43").unwrap()),
+        ));
+
+        let api_records = Arc::new(RwLock::new(api_records));
+        let api_config = ApiConfig {
+            address: SocketAddr::new(Ipv4Addr::from_str("0.0.0.0").unwrap().into(), 3452),
+        };
+
+        let api = ApiServer::new(&api_config, api_records.clone()).unwrap();
+
+        {
+            let source_id = SourceId {
+                server_id: Uuid::new_v4(),
+                source_type: RemoteConfig::source_type(),
+                source_name: "test".to_string(),
+            };
+
+            let config = RemoteConfig {
+                url: "http://localhost:3452/".to_string().parse().unwrap(),
+                interval_ms: Some(100),
+            };
+
+            let mut test_server = SingleSourceServer::new(&source_id);
+
+            let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
+
+            let records = test_server
+                .wait_for_records(|records| records.has_name(&name("www.test.local.")))
+                .await;
+
+            assert_eq!(records.len(), 1);
+
+            assert!(records.contains(
+                &Fqdn::from("www.test.local"),
+                &RData::A("10.5.23.43".parse().unwrap())
+            ));
+
+            {
+                let mut inner = api_records.write().await;
+                *inner = RecordSet::default();
+            }
+
+            let records = test_server
+                .wait_for_records(|records| !records.has_name(&name("www.test.local.")))
+                .await;
+
+            assert!(records.is_empty());
+
+            {
+                let mut inner = api_records.write().await;
+                inner.insert(Record::new(
+                    "home.test.local".into(),
+                    RData::A(Ipv4Addr::from_str("10.25.23.43").unwrap()),
+                ));
+                inner.insert(Record::new(
+                    "www.test.local".into(),
+                    RData::Cname(Fqdn::from("home.test.local")),
+                ));
+            }
+
+            let records = test_server
+                .wait_for_records(|records| records.has_name(&name("www.test.local.")))
+                .await;
+
+            assert_eq!(records.len(), 2);
+
+            assert!(records.contains(
+                &Fqdn::from("home.test.local"),
+                &RData::A("10.25.23.43".parse().unwrap())
+            ));
+
+            assert!(records.contains(
+                &Fqdn::from("www.test.local"),
+                &RData::Cname(Fqdn::from("home.test.local"))
+            ));
+        }
+
+        api.shutdown().await;
     }
 }

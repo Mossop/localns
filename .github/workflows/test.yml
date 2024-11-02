@@ -25,6 +25,9 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Setup buildx
+        uses: docker/setup-buildx-action@v1
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -35,6 +38,9 @@ jobs:
 
       - name: Cargo check
         run: cargo check --all-features
+
+      - name: Build test containers
+        run: containers/build_containers.sh
 
       - name: Run tests
         env:

@@ -275,7 +275,7 @@ mod tests {
 
     use crate::{
         dns::{Fqdn, RData, RDataConfig},
-        sources::{traefik::TraefikConfig, SourceConfig, SourceId, SourceType},
+        sources::{traefik::TraefikConfig, SourceConfig, SourceId},
         test::{name, traefik_container, SingleSourceServer},
     };
 
@@ -379,7 +379,7 @@ mod tests {
 
             let source_id = SourceId {
                 server_id: Uuid::new_v4(),
-                source_type: SourceType::Traefik,
+                source_type: TraefikConfig::source_type(),
                 source_name: "test".to_string(),
             };
 

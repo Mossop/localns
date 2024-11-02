@@ -1,0 +1,3 @@
+example.org {
+  file /data/example.org.zone
+}

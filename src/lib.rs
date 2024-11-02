@@ -164,7 +164,7 @@ impl Server {
         Ok(server)
     }
 
-    pub async fn shutdown(&self) {
+    pub async fn shutdown(self) {
         tracing::info!("Server shutting down");
 
         self.config_watcher.take().await;

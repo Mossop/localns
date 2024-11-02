@@ -1,0 +1,9 @@
+server:
+  port: 53531
+
+sources:
+  file:
+    test: file.yml
+
+zones:
+  example.org: {}

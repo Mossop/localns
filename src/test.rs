@@ -262,6 +262,16 @@ http:
     }
 }
 
+pub(crate) async fn coredns(data_dir: &Path) -> ContainerAsync<GenericImage> {
+    GenericImage::new("coredns/coredns", "1.11.3")
+        .with_wait_for(WaitFor::message_on_stdout("CoreDNS-"))
+        .with_cmd(["-conf", "/data/Corefile"])
+        .with_mount(Mount::bind_mount(data_dir.to_str().unwrap(), "/data"))
+        .start()
+        .await
+        .unwrap()
+}
+
 pub(crate) async fn coredns_container(zone: &str, zonefile: &str) -> Container {
     let temp_dir = tempdir().unwrap();
     let zone_file = temp_dir.path().join("zone");
@@ -271,19 +281,117 @@ pub(crate) async fn coredns_container(zone: &str, zonefile: &str) -> Container {
 
     write_file(&zone_file, zonefile).await;
 
-    let container = GenericImage::new("coredns/coredns", "1.11.3")
-        .with_wait_for(WaitFor::message_on_stdout("CoreDNS-"))
-        .with_cmd(["-conf", "/data/Corefile"])
-        .with_mount(Mount::bind_mount(
-            temp_dir.path().to_str().unwrap(),
-            "/data",
-        ))
-        .start()
-        .await
-        .unwrap();
-
     Container {
+        container: coredns(temp_dir.path()).await,
         _temp_dir: temp_dir,
-        container,
+    }
+}
+
+mod integration {
+    use std::{net::SocketAddr, path::PathBuf};
+
+    use futures::StreamExt;
+    use hickory_client::{
+        client::AsyncClient,
+        op::{DnsResponse, Query},
+        proto::xfer::{DnsHandle, DnsRequestOptions},
+        rr::{self, Name, RecordType},
+        udp::UdpClientStream,
+    };
+    use tokio::net::UdpSocket;
+
+    use crate::Server;
+
+    use super::*;
+
+    async fn lookup(
+        address: &str,
+        name: &Name,
+        record_type: RecordType,
+        recurse: bool,
+    ) -> DnsResponse {
+        tracing::trace!("Looking up {record_type} {name} at {address}");
+        let stream = UdpClientStream::<UdpSocket>::new(SocketAddr::from_str(address).unwrap());
+
+        let client = AsyncClient::connect(stream);
+        let (client, bg) = client.await.unwrap();
+        tokio::spawn(bg);
+
+        let query = Query::query(name.clone(), record_type);
+        let mut options = DnsRequestOptions::default();
+        options.recursion_desired = recurse;
+
+        client.lookup(query, options).next().await.unwrap().unwrap()
+    }
+
+    fn assert_records_eq(left: &[rr::Record], right: &[rr::Record]) {
+        let mut left = left.to_vec();
+        left.sort();
+        let mut right = right.to_vec();
+        right.sort();
+        assert_eq!(left.len(), right.len());
+
+        for (left, right) in left.into_iter().zip(right.into_iter()) {
+            assert_eq!(left, right);
+        }
+    }
+
+    fn assert_response_eq(left: DnsResponse, right: DnsResponse) {
+        assert_eq!(left.response_code(), right.response_code());
+        assert_eq!(left.authoritative(), right.authoritative());
+
+        assert_records_eq(left.answers(), right.answers());
+        assert_records_eq(left.additionals(), right.additionals());
+    }
+
+    async fn compare_servers(
+        left: &str,
+        right: &str,
+        name: &Name,
+        record_type: RecordType,
+        recurse: bool,
+    ) {
+        let left = lookup(left, name, record_type, recurse).await;
+        let right = lookup(right, name, record_type, recurse).await;
+
+        assert_response_eq(left, right);
+    }
+
+    #[tokio::test]
+    async fn test1() {
+        let test_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_resources")
+            .join("test1");
+        let config_file = test_dir.join("config.yml");
+
+        let core = coredns(&test_dir).await;
+        let core_address = format!(
+            "127.0.0.1:{}",
+            core.get_host_port_ipv4(ContainerPort::Udp(53))
+                .await
+                .unwrap()
+        );
+        let server = Server::new(&config_file).await.unwrap();
+        let localns_address = "127.0.0.1:53531";
+
+        compare_servers(
+            localns_address,
+            &core_address,
+            &name("www.example.org."),
+            RecordType::A,
+            true,
+        )
+        .await;
+
+        compare_servers(
+            localns_address,
+            &core_address,
+            &name("data.example.org."),
+            RecordType::A,
+            true,
+        )
+        .await;
+
+        server.shutdown().await;
     }
 }

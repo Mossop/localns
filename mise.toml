@@ -1,0 +1,28 @@
+[tools]
+python = "3.11"
+"cargo:cargo-binutils" = "latest"
+
+[env]
+_.python.venv = { path = ".venv", create = true }
+
+[tasks.build_test_containers]
+run = "scripts/build_containers.sh"
+sources = ["test_resources/containers/**/*"]
+outputs = ["test_resources/containers/.containers_built"]
+
+[tasks.test]
+depends = ["build_test_containers"]
+run = "cargo test --all-features"
+
+[tasks.kcov-coverage]
+depends = ["build_test_containers"]
+run = "scripts/kcov-coverage.sh"
+sources = ["Cargo.lock", "src/**/*.rs"]
+
+[tasks.llvm-coverage]
+depends = ["build_test_containers"]
+run = "scripts/llvm-coverage.sh"
+sources = ["Cargo.lock", "src/**/*.rs"]
+
+[tasks.cov]
+run = "scripts/cov.sh"

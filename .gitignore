@@ -1,10 +1,3 @@
 /target
-/*.yaml
-/*.yml
-/*.pem
-/*.zone
-/*.core
-/*.leases
 .python-version
-/*.profraw
-/*.profdata
+/test_resources/containers/.containers_built

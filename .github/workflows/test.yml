@@ -40,26 +40,16 @@ jobs:
         run: cargo check --all-features
 
       - name: Build test containers
-        run: containers/build_containers.sh
+        run: scripts/build_containers.sh
 
       - name: Run tests
-        env:
-          CARGO_INCREMENTAL: 0
-          RUSTFLAGS: "-C link-dead-code"
-        run: |
-          rm -rf target/debug/deps/localns-* target/cov
-          cargo test --all-features --no-run
-          for file in target/debug/deps/localns-*; do [ -x "${file}" ] || continue; mkdir -p "target/cov/$(basename $file)"; kcov --exclude-pattern=~/.cargo --verify "target/cov/$(basename $file)" "$file"; done
+        run: scripts/kcov-coverage.sh
 
       - name: Upload code coverage
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           verbose: true
-
-      - name: Cleanup build targets
-        run: |
-          rm -rf target/debug/deps/localns-* target/cov
 
   lint:
     name: "Lints"

@@ -7,24 +7,13 @@ use std::{
 
 use serde::Deserialize;
 
-use crate::dns::{Fqdn, RData};
+use crate::dns::Fqdn;
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Hash)]
-#[serde(from = "String")]
-pub enum Host {
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) enum Host {
     Name(Fqdn),
     Ipv4(Ipv4Addr),
     Ipv6(Ipv6Addr),
-}
-
-impl From<Host> for RData {
-    fn from(host: Host) -> RData {
-        match host {
-            Host::Name(name) => name.into(),
-            Host::Ipv4(ip) => ip.into(),
-            Host::Ipv6(ip) => ip.into(),
-        }
-    }
 }
 
 impl Display for Host {
@@ -39,18 +28,6 @@ impl Display for Host {
 
 impl From<&str> for Host {
     fn from(host: &str) -> Self {
-        if let Ok(ip) = host.parse() {
-            Host::Ipv4(ip)
-        } else if let Ok(ip) = host.parse() {
-            Host::Ipv6(ip)
-        } else {
-            Host::Name(host.into())
-        }
-    }
-}
-
-impl From<String> for Host {
-    fn from(host: String) -> Self {
         if let Ok(ip) = host.parse() {
             Host::Ipv4(ip)
         } else if let Ok(ip) = host.parse() {

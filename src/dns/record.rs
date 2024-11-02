@@ -60,12 +60,6 @@ impl TryInto<rr::RData> for RData {
     }
 }
 
-impl From<Fqdn> for RData {
-    fn from(name: Fqdn) -> Self {
-        RData::Cname(name)
-    }
-}
-
 impl From<IpAddr> for RData {
     fn from(ip: IpAddr) -> Self {
         match ip {
@@ -89,19 +83,7 @@ impl From<Ipv4Addr> for RData {
 
 impl From<String> for RData {
     fn from(str: String) -> Self {
-        match IpAddr::from_str(&str) {
-            Ok(ip) => ip.into(),
-            Err(_) => RData::Cname(str.into()),
-        }
-    }
-}
-
-impl From<&String> for RData {
-    fn from(str: &String) -> Self {
-        match IpAddr::from_str(str) {
-            Ok(ip) => ip.into(),
-            Err(_) => RData::Cname(str.into()),
-        }
+        Self::from(str.as_str())
     }
 }
 

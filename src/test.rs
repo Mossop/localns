@@ -300,9 +300,8 @@ mod integration {
     };
     use tokio::net::UdpSocket;
 
-    use crate::Server;
-
     use super::*;
+    use crate::Server;
 
     async fn lookup(
         address: &str,

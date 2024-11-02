@@ -184,3 +184,69 @@ impl Config {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use crate::{
+        config::{Config, ZoneConfigProvider},
+        dns::Fqdn,
+        test::write_file,
+    };
+
+    #[tokio::test]
+    async fn parse_config() {
+        let temp = TempDir::new().unwrap();
+
+        let config_file = temp.path().join("config.yml");
+        write_file(
+            &config_file,
+            r#"
+defaults:
+  upstream: 10.10.14.250
+
+sources:
+  file:
+    zones: zone.yaml
+  dhcp:
+    dnsmask:
+      lease_file: dnsmasq.leases
+      zone: home.clantownsend.com
+  remote:
+    other:
+        url: https://other.local/
+
+zones:
+  home.local: {}
+  other.local:
+    upstream: 10.10.15.250:5353
+"#,
+        )
+        .await;
+
+        let config = Config::from_file(&config_file).unwrap();
+
+        let zone_config = config.zones.zone_config(&Fqdn::from("nowhere.local"));
+
+        assert!(!zone_config.authoritative);
+        assert_eq!(zone_config.upstreams.len(), 1);
+        assert_eq!(
+            zone_config.upstreams.front().unwrap().config.address(53),
+            "10.10.14.250:53"
+        );
+
+        let zone_config = config.zones.zone_config(&Fqdn::from("www.other.local"));
+
+        assert!(zone_config.authoritative);
+        assert_eq!(zone_config.upstreams.len(), 2);
+        assert_eq!(
+            zone_config.upstreams.front().unwrap().config.address(53),
+            "10.10.15.250:5353"
+        );
+        assert_eq!(
+            zone_config.upstreams.get(1).unwrap().config.address(5324),
+            "10.10.14.250:5324"
+        );
+    }
+}

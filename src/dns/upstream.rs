@@ -27,7 +27,7 @@ async fn connect_client(address: SocketAddr) -> Result<AsyncClient, Error> {
 #[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(from = "UpstreamConfig")]
 pub(crate) struct Upstream {
-    config: UpstreamConfig,
+    pub(crate) config: UpstreamConfig,
 }
 
 impl fmt::Debug for Upstream {

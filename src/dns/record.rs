@@ -1,8 +1,5 @@
 use std::{
-    collections::{
-        hash_map::{IntoValues, Values},
-        HashMap, HashSet,
-    },
+    collections::{hash_map::IntoValues, HashMap, HashSet},
     fmt::{self},
     hash::Hash,
     iter::{empty, once, Flatten},
@@ -16,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::ZoneConfig;
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Hash)]
+#[serde(tag = "type", content = "value")]
 pub enum RData {
     A(Ipv4Addr),
     Aaaa(Ipv6Addr),
@@ -96,22 +94,6 @@ impl From<&str> for RData {
     }
 }
 
-#[derive(Deserialize, Eq, PartialEq, Debug, Clone)]
-#[serde(untagged)]
-pub enum RDataConfig {
-    Simple(String),
-    RData(RData),
-}
-
-impl From<RDataConfig> for RData {
-    fn from(config: RDataConfig) -> RData {
-        match config {
-            RDataConfig::Simple(str) => str.into(),
-            RDataConfig::RData(rdata) => rdata,
-        }
-    }
-}
-
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(from = "String")]
 #[serde(into = "String")]
@@ -157,27 +139,10 @@ impl Fqdn {
         }
     }
 
-    pub fn is_sibling(&self, other: &Fqdn) -> bool {
-        self.domain().map(|d| d.is_parent(other)).unwrap_or(false)
-    }
-
     pub fn name(&self) -> Option<&Name> {
         match self {
             Fqdn::Valid(name) => Some(name),
             _ => None,
-        }
-    }
-
-    pub fn domain(&self) -> Option<Self> {
-        match self {
-            Fqdn::Valid(name) => {
-                if name.is_root() {
-                    None
-                } else {
-                    Some(Fqdn::Valid(name.trim_to(name.num_labels() as usize - 1)))
-                }
-            }
-            Fqdn::Invalid(name) => name.find('.').map(|pos| Fqdn::from(&name[pos..])),
         }
     }
 }
@@ -396,7 +361,7 @@ impl RecordSet {
         self.names.contains(name)
     }
 
-    pub fn records(&self) -> Flatten<Values<Fqdn, HashSet<Record>>> {
+    pub fn records(&self) -> impl Iterator<Item = &Record> {
         self.records.values().flatten()
     }
 
@@ -460,7 +425,13 @@ impl RecordSet {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.records.is_empty()
+        for records in self.records.values() {
+            if !records.is_empty() {
+                return false;
+            }
+        }
+
+        true
     }
 
     pub fn lookup(

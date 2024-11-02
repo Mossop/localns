@@ -167,7 +167,7 @@ mod tests {
 
         let api_records = Arc::new(RwLock::new(api_records));
         let api_config = ApiConfig {
-            address: SocketAddr::new(Ipv4Addr::from_str("0.0.0.0").unwrap().into(), 3452),
+            address: SocketAddr::new(Ipv4Addr::from_str("0.0.0.0").unwrap().into(), 0),
         };
 
         let api = ApiServer::new(&api_config, api_records.clone()).unwrap();
@@ -180,7 +180,7 @@ mod tests {
             };
 
             let config = RemoteConfig {
-                url: "http://localhost:3452/".to_string().parse().unwrap(),
+                url: format!("http://localhost:{}/", api.port).parse().unwrap(),
                 interval_ms: Some(100),
             };
 
@@ -239,6 +239,7 @@ mod tests {
             ));
         }
 
+        tracing::trace!("Shutting down");
         api.shutdown().await;
     }
 }

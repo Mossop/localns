@@ -28,7 +28,7 @@ async fn records(server: web::Data<AppData>) -> impl Responder {
     web::Json(records)
 }
 
-fn create_server(config: &ApiConfig, app_data: AppData) -> Option<dev::Server> {
+fn create_server(config: &ApiConfig, app_data: AppData) -> Option<(dev::Server, u16)> {
     tracing::trace!(address = %config.address, "Starting API server");
 
     let api_server = match HttpServer::new(move || {
@@ -46,20 +46,28 @@ fn create_server(config: &ApiConfig, app_data: AppData) -> Option<dev::Server> {
         }
     };
 
-    Some(api_server.run())
+    let port = api_server.addrs().first().unwrap().port();
+
+    Some((api_server.run(), port))
 }
 
 pub(crate) struct ApiServer {
+    #[cfg(test)]
+    pub(crate) port: u16,
     api_server: dev::ServerHandle,
 }
 
 impl ApiServer {
     pub(crate) fn new(config: &ApiConfig, data: AppData) -> Option<Self> {
-        create_server(config, data).map(|api_server| {
+        create_server(config, data).map(|(api_server, _port)| {
             let handle = api_server.handle();
             tokio::spawn(api_server);
 
-            Self { api_server: handle }
+            Self {
+                #[cfg(test)]
+                port: _port,
+                api_server: handle,
+            }
         })
     }
 

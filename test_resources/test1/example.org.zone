@@ -2,4 +2,5 @@ $ORIGIN example.org.
 @	3600 IN	SOA hostmaster.example.org. hostmaster.example.org. 2024082745 7200 3600 1209600 3600
 
 www     IN A        10.10.23.34
+www     IN AAAA     1af2:cac:8e12:5b00::2
 data    IN CNAME    www

@@ -204,28 +204,7 @@ pub(crate) async fn write_file<D: AsRef<[u8]>>(path: &Path, data: D) {
 pub(crate) async fn traefik_container(config: &str) -> Container {
     let temp_dir = tempdir().unwrap();
 
-    let config_file = temp_dir.path().join("traefik.yml");
-
-    write_file(
-        &config_file,
-        r#"
-api: {}
-
-entryPoints:
-  http:
-    address: ":80"
-
-providers:
-  file:
-    directory: /etc/traefik/conf.d
-"#,
-    )
-    .await;
-
-    let provider_dir = temp_dir.path().join("conf.d");
-    fs::create_dir(&provider_dir).await.unwrap();
-
-    let api_file = provider_dir.join("api.yml");
+    let api_file = temp_dir.path().join("api.yml");
     write_file(
         &api_file,
         r#"
@@ -238,7 +217,7 @@ http:
     )
     .await;
 
-    let config_file = provider_dir.join("config.yml");
+    let config_file = temp_dir.path().join("config.yml");
     write_file(&config_file, config).await;
 
     let wait = HttpWaitStrategy::new("/api/overview")
@@ -246,11 +225,11 @@ http:
         .with_header("Host", HeaderValue::from_static("localhost"))
         .with_expected_status_code(200_u16);
 
-    let container = GenericImage::new("traefik", "v3.1")
+    let container = GenericImage::new("localns_test_traefik", "latest")
         .with_wait_for(WaitFor::Http(wait))
         .with_mount(Mount::bind_mount(
             temp_dir.path().to_str().unwrap(),
-            "/etc/traefik",
+            "/etc/traefik/conf.d",
         ))
         .start()
         .await
@@ -263,9 +242,8 @@ http:
 }
 
 pub(crate) async fn coredns(data_dir: &Path) -> ContainerAsync<GenericImage> {
-    GenericImage::new("coredns/coredns", "1.11.3")
+    GenericImage::new("localns_test_coredns", "latest")
         .with_wait_for(WaitFor::message_on_stdout("CoreDNS-"))
-        .with_cmd(["-conf", "/data/Corefile"])
         .with_mount(Mount::bind_mount(data_dir.to_str().unwrap(), "/data"))
         .start()
         .await
@@ -277,7 +255,7 @@ pub(crate) async fn coredns_container(zone: &str, zonefile: &str) -> Container {
     let zone_file = temp_dir.path().join("zone");
     let config_file = temp_dir.path().join("Corefile");
 
-    write_file(&config_file, format!("{zone} {{\n  file /data/zone\n}}\n")).await;
+    write_file(&config_file, format!("{zone} {{\n  file zone\n}}\n")).await;
 
     write_file(&zone_file, zonefile).await;
 
@@ -358,10 +336,31 @@ mod integration {
 
     #[tokio::test]
     async fn test1() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_file = temp_dir.path().join("config.yml");
+
         let test_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test_resources")
             .join("test1");
-        let config_file = test_dir.join("config.yml");
+
+        write_file(
+            &config_file,
+            format!(
+                r#"
+server:
+  port: 53531
+
+sources:
+  file:
+    test: {}/file.yml
+
+zones:
+  example.org: {{}}
+"#,
+                test_dir.display()
+            ),
+        )
+        .await;
 
         let core = coredns(&test_dir).await;
         let core_address = format!(

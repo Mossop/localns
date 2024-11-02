@@ -16,7 +16,10 @@ tokio = { version = "1.41.0", features = ["full"] }
 serde = "^1.0.214"
 serde_yaml = "^0.9.34"
 futures = "^0.3.31"
-reqwest = { version = "^0.12.8", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "^0.12.8", default-features = false, features = [
+  "json",
+  "rustls-tls",
+] }
 notify = "^7.0.0"
 hickory-server = "^0.24.1"
 hickory-client = "^0.24.1"

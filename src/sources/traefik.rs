@@ -9,7 +9,7 @@ use tracing::instrument;
 use crate::{
     backoff::Backoff,
     config::deserialize_url,
-    dns::{Fqdn, RData, RDataConfig, Record, RecordSet},
+    dns::{Fqdn, RData, Record, RecordSet},
     sources::{SourceConfig, SourceId, SourceType, SpawnHandle},
     Error, RecordServer, SourceRecords,
 };
@@ -20,7 +20,7 @@ const POLL_INTERVAL_MS: u64 = 15000;
 pub(crate) struct TraefikConfig {
     #[serde(deserialize_with = "deserialize_url")]
     url: Url,
-    address: Option<RDataConfig>,
+    address: Option<RData>,
     #[serde(default)]
     interval_ms: Option<u64>,
 }
@@ -154,7 +154,7 @@ fn generate_records(
     routers: Vec<ApiRouter>,
 ) -> RecordSet {
     let rdata = if let Some(address) = &traefik_config.address {
-        address.clone().into()
+        address.clone()
     } else if let Some(host) = traefik_config.url.host_str() {
         host.into()
     } else {
@@ -274,7 +274,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::{
-        dns::{Fqdn, RData, RDataConfig},
+        dns::{Fqdn, RData},
         sources::{traefik::TraefikConfig, SourceConfig, SourceId},
         test::{name, traefik_container, SingleSourceServer},
     };
@@ -406,7 +406,7 @@ mod tests {
 
             let config = TraefikConfig {
                 url: format!("http://localhost:{port}/api/").parse().unwrap(),
-                address: Some(RDataConfig::RData(RData::A("10.10.15.23".parse().unwrap()))),
+                address: Some(RData::A("10.10.15.23".parse().unwrap())),
                 interval_ms: Some(100),
             };
 

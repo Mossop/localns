@@ -1,0 +1,9 @@
+api: {}
+
+entryPoints:
+  http:
+    address: ":80"
+
+providers:
+  file:
+    directory: /etc/traefik/conf.d

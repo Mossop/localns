@@ -5,10 +5,11 @@ use std::{
 };
 
 use figment::value::magic::RelativePathBuf;
+use serde::Deserialize;
 use tracing::instrument;
 
 use crate::{
-    dns::{Fqdn, RDataConfig, Record, RecordSet},
+    dns::{Fqdn, RData, Record, RecordSet},
     sources::{SourceConfig, SourceId, SourceType, WatcherHandle},
     watcher::{watch, FileEvent, WatchListener},
     Error, RecordServer, SourceRecords,
@@ -16,19 +17,49 @@ use crate::{
 
 pub(crate) type FileConfig = RelativePathBuf;
 
-type LeaseFile = HashMap<Fqdn, RDataConfig>;
+#[derive(Deserialize, Eq, PartialEq, Debug)]
+#[serde(untagged)]
+enum RDataItem {
+    RData(RData),
+    Str(String),
+}
+
+impl From<RDataItem> for RData {
+    fn from(item: RDataItem) -> RData {
+        match item {
+            RDataItem::RData(rdata) => rdata,
+            RDataItem::Str(str) => RData::from(str),
+        }
+    }
+}
+
+#[derive(Deserialize, Eq, PartialEq, Debug)]
+#[serde(untagged)]
+enum RDataOneOrMany {
+    List(Vec<RDataItem>),
+    RData(RDataItem),
+}
+
+type ZoneFile = HashMap<Fqdn, RDataOneOrMany>;
 
 #[instrument(fields(%source_id), err)]
 fn parse_file(source_id: &SourceId, zone_file: &Path) -> Result<RecordSet, Error> {
     tracing::trace!("Parsing zone file");
 
     let f = File::open(zone_file)?;
-    let leases: LeaseFile = serde_yaml::from_reader(f)?;
+    let zone_data: ZoneFile = serde_yaml::from_reader(f)?;
 
     let mut records = RecordSet::new();
 
-    for (name, rdata) in leases {
-        records.insert(Record::new(name, rdata.into()));
+    for (name, rdata) in zone_data {
+        match rdata {
+            RDataOneOrMany::RData(rdata) => records.insert(Record::new(name, rdata.into())),
+            RDataOneOrMany::List(list) => {
+                for rdata in list {
+                    records.insert(Record::new(name.clone(), rdata.into()));
+                }
+            }
+        }
     }
 
     Ok(records)
@@ -99,7 +130,10 @@ impl SourceConfig for FileConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::Ipv4Addr, str::FromStr};
+    use std::{
+        net::{Ipv4Addr, Ipv6Addr},
+        str::FromStr,
+    };
 
     use tempfile::TempDir;
     use tokio::fs;
@@ -120,7 +154,9 @@ mod tests {
         write_file(
             &zone_file,
             r#"
-www.home.local: 10.14.23.123
+www.home.local:
+  - 10.14.23.123
+  - 1af2:cac:8e12:5b00::2
 other.home.local: www.home.local
 "#,
         )
@@ -142,11 +178,16 @@ other.home.local: www.home.local
             .wait_for_records(|records| records.has_name(&name("www.home.local.")))
             .await;
 
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), 3);
 
         assert!(records.contains(
             &Fqdn::from("www.home.local"),
             &RData::A(Ipv4Addr::from_str("10.14.23.123").unwrap())
+        ));
+
+        assert!(records.contains(
+            &Fqdn::from("www.home.local"),
+            &RData::Aaaa(Ipv6Addr::from_str("1af2:cac:8e12:5b00::2").unwrap())
         ));
 
         assert!(records.contains(

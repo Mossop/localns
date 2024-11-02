@@ -10,8 +10,11 @@ run = "scripts/build_containers.sh"
 sources = ["test_resources/containers/**/*"]
 outputs = ["test_resources/containers/.containers_built"]
 
+[tasks.kill_containers]
+run = "docker container ls -f 'label=localns.testcontainer=1' -q | xargs -r docker rm -f"
+
 [tasks.test]
-depends = ["build_test_containers"]
+depends = ["build_test_containers", "kill_containers"]
 run = "cargo test --all-features"
 
 [tasks.kcov-coverage]

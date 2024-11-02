@@ -17,7 +17,7 @@ use testcontainers::{
 use tokio::{fs, io::AsyncWriteExt, sync::watch, time::timeout};
 
 use crate::{
-    dns::RecordSet,
+    dns::{Fqdn, RecordSet},
     sources::{SourceId, SourceRecords},
     RecordServer,
 };
@@ -164,6 +164,10 @@ impl RecordServer for MultiSourceServer {
 
 pub(crate) fn name(n: &str) -> Name {
     Name::from_str(n).unwrap()
+}
+
+pub(crate) fn fqdn(n: &str) -> Fqdn {
+    Fqdn::try_from(n).unwrap()
 }
 
 pub(crate) fn rdata_a(ip: &str) -> RData {

@@ -60,11 +60,11 @@ impl ZoneConfig {
         let origin = self.origin.clone()?;
 
         Some(rr::Record::from_rdata(
-            origin.name()?.clone(),
+            origin.name(),
             self.ttl,
             rr::RData::SOA(SOA::new(
-                origin.child("ns").name()?.clone(),
-                origin.child("hostmaster").name()?.clone(),
+                origin.child("ns").ok()?.name(),
+                origin.child("hostmaster").ok()?.name(),
                 0,
                 self.ttl.try_into().unwrap(),
                 self.ttl.try_into().unwrap(),
@@ -133,7 +133,7 @@ impl ZoneConfigProvider for Zones {
         let mut config = ZoneConfig::from(&self.defaults);
 
         for (n, c) in &self.zones {
-            if n.is_parent(name) {
+            if n.zone_of(name) {
                 config.apply_config(n.clone(), c);
             }
         }
@@ -191,8 +191,7 @@ mod tests {
 
     use crate::{
         config::{Config, ZoneConfigProvider},
-        dns::Fqdn,
-        test::write_file,
+        test::{fqdn, write_file},
     };
 
     #[tokio::test]
@@ -227,7 +226,7 @@ zones:
 
         let config = Config::from_file(&config_file).unwrap();
 
-        let zone_config = config.zones.zone_config(&Fqdn::from("nowhere.local"));
+        let zone_config = config.zones.zone_config(&fqdn("nowhere.local"));
 
         assert!(!zone_config.authoritative);
         assert_eq!(zone_config.upstreams.len(), 1);
@@ -236,7 +235,7 @@ zones:
             "10.10.14.250:53"
         );
 
-        let zone_config = config.zones.zone_config(&Fqdn::from("www.other.local"));
+        let zone_config = config.zones.zone_config(&fqdn("www.other.local"));
 
         assert!(zone_config.authoritative);
         assert_eq!(zone_config.upstreams.len(), 2);

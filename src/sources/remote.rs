@@ -152,16 +152,16 @@ mod tests {
 
     use crate::{
         api::{ApiConfig, ApiServer},
-        dns::{Fqdn, RData, Record, RecordSet},
+        dns::{RData, Record, RecordSet},
         sources::{remote::RemoteConfig, SourceConfig, SourceId},
-        test::{name, SingleSourceServer},
+        test::{fqdn, name, SingleSourceServer},
     };
 
     #[tokio::test(flavor = "multi_thread")]
     async fn integration() {
         let mut api_records = RecordSet::default();
         api_records.insert(Record::new(
-            "www.test.local".into(),
+            fqdn("www.test.local"),
             RData::A(Ipv4Addr::from_str("10.5.23.43").unwrap()),
         ));
 
@@ -195,7 +195,7 @@ mod tests {
             assert_eq!(records.len(), 1);
 
             assert!(records.contains(
-                &Fqdn::from("www.test.local"),
+                &fqdn("www.test.local"),
                 &RData::A("10.5.23.43".parse().unwrap())
             ));
 
@@ -213,12 +213,12 @@ mod tests {
             {
                 let mut inner = api_records.write().await;
                 inner.insert(Record::new(
-                    "home.test.local".into(),
+                    fqdn("home.test.local"),
                     RData::A(Ipv4Addr::from_str("10.25.23.43").unwrap()),
                 ));
                 inner.insert(Record::new(
-                    "www.test.local".into(),
-                    RData::Cname(Fqdn::from("home.test.local")),
+                    fqdn("www.test.local"),
+                    RData::Cname(fqdn("home.test.local")),
                 ));
             }
 
@@ -229,13 +229,13 @@ mod tests {
             assert_eq!(records.len(), 2);
 
             assert!(records.contains(
-                &Fqdn::from("home.test.local"),
+                &fqdn("home.test.local"),
                 &RData::A("10.25.23.43".parse().unwrap())
             ));
 
             assert!(records.contains(
-                &Fqdn::from("www.test.local"),
-                &RData::Cname(Fqdn::from("home.test.local"))
+                &fqdn("www.test.local"),
+                &RData::Cname(fqdn("home.test.local"))
             ));
         }
 

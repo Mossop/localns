@@ -251,9 +251,9 @@ mod tests {
 
     use crate::{
         config::Config,
-        dns::{Fqdn, RData},
+        dns::RData,
         sources::{SourceId, SourceType, Sources},
-        test::{name, write_file, MultiSourceServer},
+        test::{fqdn, name, write_file, MultiSourceServer},
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -323,12 +323,12 @@ foo.baz.local: home.other.local
         let records = record_map.get(&source_id_1).unwrap();
         assert_eq!(records.len(), 2);
         assert!(records.contains(
-            &Fqdn::from("home.test.local"),
+            &fqdn("home.test.local"),
             &RData::A(Ipv4Addr::from_str("10.45.23.56").unwrap())
         ));
         assert!(records.contains(
-            &Fqdn::from("www.test.local"),
-            &RData::Cname(Fqdn::from("home.test.local"))
+            &fqdn("www.test.local"),
+            &RData::Cname(fqdn("home.test.local"))
         ));
 
         write_file(
@@ -358,27 +358,27 @@ sources:
         let records = record_map.get(&source_id_1).unwrap();
         assert_eq!(records.len(), 2);
         assert!(records.contains(
-            &Fqdn::from("home.test.local"),
+            &fqdn("home.test.local"),
             &RData::A(Ipv4Addr::from_str("10.45.23.56").unwrap())
         ));
         assert!(records.contains(
-            &Fqdn::from("www.test.local"),
-            &RData::Cname(Fqdn::from("home.test.local"))
+            &fqdn("www.test.local"),
+            &RData::Cname(fqdn("home.test.local"))
         ));
 
         let records = record_map.get(&source_id_2).unwrap();
         assert_eq!(records.len(), 3);
         assert!(records.contains(
-            &Fqdn::from("home.other.local"),
+            &fqdn("home.other.local"),
             &RData::A(Ipv4Addr::from_str("10.45.23.57").unwrap())
         ));
         assert!(records.contains(
-            &Fqdn::from("www.other.local"),
-            &RData::Cname(Fqdn::from("home.other.local"))
+            &fqdn("www.other.local"),
+            &RData::Cname(fqdn("home.other.local"))
         ));
         assert!(records.contains(
-            &Fqdn::from("test.other.local"),
-            &RData::Cname(Fqdn::from("home.test.local"))
+            &fqdn("test.other.local"),
+            &RData::Cname(fqdn("home.test.local"))
         ));
 
         write_file(
@@ -408,23 +408,23 @@ sources:
         let records = record_map.get(&source_id_2).unwrap();
         assert_eq!(records.len(), 3);
         assert!(records.contains(
-            &Fqdn::from("home.other.local"),
+            &fqdn("home.other.local"),
             &RData::A(Ipv4Addr::from_str("10.45.23.57").unwrap())
         ));
         assert!(records.contains(
-            &Fqdn::from("www.other.local"),
-            &RData::Cname(Fqdn::from("home.other.local"))
+            &fqdn("www.other.local"),
+            &RData::Cname(fqdn("home.other.local"))
         ));
         assert!(records.contains(
-            &Fqdn::from("test.other.local"),
-            &RData::Cname(Fqdn::from("home.test.local"))
+            &fqdn("test.other.local"),
+            &RData::Cname(fqdn("home.test.local"))
         ));
 
         let records = record_map.get(&source_id_3).unwrap();
         assert_eq!(records.len(), 1);
         assert!(records.contains(
-            &Fqdn::from("foo.baz.local"),
-            &RData::Cname(Fqdn::from("home.other.local"))
+            &fqdn("foo.baz.local"),
+            &RData::Cname(fqdn("home.other.local"))
         ));
 
         write_file(&config_file, "").await;

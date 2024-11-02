@@ -29,9 +29,23 @@ fn parse_dnsmasq(zone: &Fqdn, data: &str) -> RecordSet {
         }
 
         if let (Some(name), Some(ip)) = (parts.get(3), parts.get(2)) {
-            let name = zone.child(name);
+            let name = match zone.child(*name) {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::warn!(error=%e, "Error parsing lease file");
+                    continue;
+                }
+            };
 
-            records.insert(Record::new(name, RData::from(*ip)));
+            let rdata = match RData::try_from(*ip) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(error=%e, "Error parsing lease file");
+                    continue;
+                }
+            };
+
+            records.insert(Record::new(name, rdata));
         }
     }
 
@@ -116,14 +130,14 @@ mod tests {
     use uuid::Uuid;
 
     use crate::{
-        dns::{Fqdn, RData},
+        dns::RData,
         sources::{dhcp::DhcpConfig, SourceConfig, SourceId},
-        test::{name, write_file, SingleSourceServer},
+        test::{fqdn, name, write_file, SingleSourceServer},
     };
 
     #[test]
     fn parse_hosts() {
-        let zone = Fqdn::from("home.local");
+        let zone = fqdn("home.local");
 
         let records = super::parse_dnsmasq(
             &zone,
@@ -142,23 +156,23 @@ bad line
         assert_eq!(records.len(), 7);
 
         assert!(records.contains(
-            &Fqdn::from("mandelbrot.home.local"),
+            &fqdn("mandelbrot.home.local"),
             &RData::A(Ipv4Addr::from_str("10.10.15.230").unwrap())
         ));
 
         assert!(records.contains(
-            &Fqdn::from("laptop.home.local"),
+            &fqdn("laptop.home.local"),
             &RData::A(Ipv4Addr::from_str("10.10.1.70").unwrap())
         ));
 
         assert!(records.contains_reverse(
             Ipv4Addr::from_str("10.10.1.70").unwrap(),
-            &Fqdn::from("laptop.home.local.")
+            &fqdn("laptop.home.local.")
         ));
 
         assert!(records.contains_reverse(
             Ipv4Addr::from_str("10.10.15.230").unwrap(),
-            &Fqdn::from("mandelbrot.home.local.")
+            &fqdn("mandelbrot.home.local.")
         ));
     }
 
@@ -185,7 +199,7 @@ bad line
 
         let config = DhcpConfig {
             lease_file: lease_file.as_path().into(),
-            zone: Fqdn::from("home.local."),
+            zone: fqdn("home.local."),
         };
 
         let mut test_server = SingleSourceServer::new(&source_id);
@@ -199,12 +213,12 @@ bad line
         assert_eq!(records.len(), 2);
 
         assert!(records.contains(
-            &Fqdn::from("caldigit.home.local"),
+            &fqdn("caldigit.home.local"),
             &RData::A(Ipv4Addr::from_str("10.10.1.24").unwrap())
         ));
 
         assert!(records.contains(
-            &Fqdn::from("laptop.home.local"),
+            &fqdn("laptop.home.local"),
             &RData::A(Ipv4Addr::from_str("10.10.1.70").unwrap())
         ));
 
@@ -229,7 +243,7 @@ bad line
         assert!(!records.has_name(&name("laptop.home.local.")));
 
         assert!(records.contains(
-            &Fqdn::from("other.home.local"),
+            &fqdn("other.home.local"),
             &RData::A(Ipv4Addr::from_str("10.10.1.58").unwrap())
         ));
     }

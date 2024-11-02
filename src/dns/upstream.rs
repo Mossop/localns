@@ -150,7 +150,7 @@ data    IN CNAME www
         .await;
 
         let upstream = Upstream::from(Address {
-            host: Host::from("127.0.0.1"),
+            host: Host::try_from("127.0.0.1").unwrap(),
             port: Some(coredns.get_udp_port(53).await),
         });
 

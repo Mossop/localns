@@ -201,7 +201,7 @@ mod tests {
     use crate::{
         config::{ZoneConfig, ZoneConfigProvider},
         dns::{query::QueryState, Fqdn, RData, Record, RecordSet, ServerState},
-        test::{name, rdata_a, rdata_cname},
+        test::{fqdn, name, rdata_a, rdata_cname},
     };
 
     #[derive(Clone)]
@@ -217,8 +217,8 @@ mod tests {
     async fn query() {
         let mut records = RecordSet::new();
         records.insert(Record::new(
-            Fqdn::from("test.home.local."),
-            RData::Cname(Fqdn::from("other.home.local.")),
+            fqdn("test.home.local."),
+            RData::Cname(fqdn("other.home.local.")),
         ));
 
         let query = Query::query(name("test.home.local."), RecordType::A);
@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(*record.data().unwrap(), rdata_cname("other.home.local."));
 
         records.insert(Record::new(
-            Fqdn::from("other.home.local."),
+            fqdn("other.home.local."),
             RData::A("10.10.45.23".parse().unwrap()),
         ));
 

@@ -7,11 +7,8 @@ use std::{
 
 use serde::Deserialize;
 
-use crate::dns::Fqdn;
-
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) enum Host {
-    Name(Fqdn),
     Ipv4(Ipv4Addr),
     Ipv6(Ipv6Addr),
 }
@@ -19,22 +16,18 @@ pub(crate) enum Host {
 impl Display for Host {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Host::Name(st) => f.pad(st.to_string().trim_end_matches('.')),
             Host::Ipv4(ip) => f.pad(&ip.to_string()),
             Host::Ipv6(ip) => f.pad(&ip.to_string()),
         }
     }
 }
 
-impl From<&str> for Host {
-    fn from(host: &str) -> Self {
-        if let Ok(ip) = host.parse() {
-            Host::Ipv4(ip)
-        } else if let Ok(ip) = host.parse() {
-            Host::Ipv6(ip)
-        } else {
-            Host::Name(host.into())
-        }
+impl TryFrom<&str> for Host {
+    type Error = <IpAddr as FromStr>::Err;
+
+    fn try_from(host: &str) -> Result<Self, Self::Error> {
+        let ip = IpAddr::from_str(host)?;
+        Ok(ip.into())
     }
 }
 
@@ -60,7 +53,7 @@ impl From<IpAddr> for Host {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Hash)]
-#[serde(from = "String")]
+#[serde(try_from = "String")]
 pub(crate) struct Address {
     pub host: Host,
     pub port: Option<u16>,
@@ -93,41 +86,25 @@ impl Display for Address {
     }
 }
 
-impl From<&str> for Address {
-    fn from(host: &str) -> Self {
-        if let Ok(addr) = SocketAddr::from_str(host) {
-            Self {
+impl TryFrom<String> for Address {
+    type Error = <SocketAddr as FromStr>::Err;
+
+    fn try_from(host: String) -> Result<Self, Self::Error> {
+        match SocketAddr::from_str(&host) {
+            Ok(addr) => Ok(Self {
                 host: addr.ip().into(),
                 port: Some(addr.port()),
-            }
-        } else if let Ok(ip) = host.parse::<Ipv4Addr>() {
-            Host::from(ip).into()
-        } else if let Ok(ip) = host.parse::<Ipv6Addr>() {
-            Host::from(ip).into()
-        } else if let Some(pos) = host.rfind(':') {
-            if let Ok(port) = host[pos + 1..].parse::<u16>() {
-                Self {
-                    host: host[0..pos].into(),
-                    port: Some(port),
+            }),
+            Err(e) => {
+                if let Ok(ip) = host.parse::<Ipv4Addr>() {
+                    Ok(Host::from(ip).into())
+                } else if let Ok(ip) = host.parse::<Ipv6Addr>() {
+                    Ok(Host::from(ip).into())
+                } else {
+                    Err(e)
                 }
-            } else {
-                Self {
-                    host: host.into(),
-                    port: None,
-                }
-            }
-        } else {
-            Self {
-                host: host.into(),
-                port: None,
             }
         }
-    }
-}
-
-impl From<String> for Address {
-    fn from(host: String) -> Self {
-        Address::from(host.as_str())
     }
 }
 

@@ -5,6 +5,7 @@ use std::{
 };
 
 use figment::value::magic::RelativePathBuf;
+use hickory_server::proto::error::ProtoError;
 use serde::Deserialize;
 use tracing::instrument;
 
@@ -24,11 +25,13 @@ enum RDataItem {
     Str(String),
 }
 
-impl From<RDataItem> for RData {
-    fn from(item: RDataItem) -> RData {
+impl TryFrom<RDataItem> for RData {
+    type Error = ProtoError;
+
+    fn try_from(item: RDataItem) -> Result<Self, Self::Error> {
         match item {
-            RDataItem::RData(rdata) => rdata,
-            RDataItem::Str(str) => RData::from(str),
+            RDataItem::RData(rdata) => Ok(rdata),
+            RDataItem::Str(str) => RData::try_from(str.as_str()),
         }
     }
 }
@@ -53,10 +56,26 @@ fn parse_file(source_id: &SourceId, zone_file: &Path) -> Result<RecordSet, Error
 
     for (name, rdata) in zone_data {
         match rdata {
-            RDataOneOrMany::RData(rdata) => records.insert(Record::new(name, rdata.into())),
+            RDataOneOrMany::RData(item) => {
+                let rdata = match item.try_into() {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::warn!(error=%e, "Error parsing zone file");
+                        continue;
+                    }
+                };
+                records.insert(Record::new(name, rdata));
+            }
             RDataOneOrMany::List(list) => {
-                for rdata in list {
-                    records.insert(Record::new(name.clone(), rdata.into()));
+                for item in list {
+                    let rdata = match item.try_into() {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::warn!(error=%e, "Error parsing zone file");
+                            continue;
+                        }
+                    };
+                    records.insert(Record::new(name.clone(), rdata));
                 }
             }
         }
@@ -140,9 +159,9 @@ mod tests {
     use uuid::Uuid;
 
     use crate::{
-        dns::{Fqdn, RData},
+        dns::RData,
         sources::{file::FileConfig, SourceConfig, SourceId},
-        test::{name, write_file, SingleSourceServer},
+        test::{fqdn, name, write_file, SingleSourceServer},
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -181,18 +200,18 @@ other.home.local: www.home.local
         assert_eq!(records.len(), 3);
 
         assert!(records.contains(
-            &Fqdn::from("www.home.local"),
+            &fqdn("www.home.local"),
             &RData::A(Ipv4Addr::from_str("10.14.23.123").unwrap())
         ));
 
         assert!(records.contains(
-            &Fqdn::from("www.home.local"),
+            &fqdn("www.home.local"),
             &RData::Aaaa(Ipv6Addr::from_str("1af2:cac:8e12:5b00::2").unwrap())
         ));
 
         assert!(records.contains(
-            &Fqdn::from("other.home.local"),
-            &RData::Cname(Fqdn::from("www.home.local"))
+            &fqdn("other.home.local"),
+            &RData::Cname(fqdn("www.home.local"))
         ));
 
         write_file(
@@ -212,7 +231,7 @@ www.home.local: 10.14.23.123
         assert!(!records.has_name(&name("other.home.local")));
 
         assert!(records.contains(
-            &Fqdn::from("www.home.local"),
+            &fqdn("www.home.local"),
             &RData::A(Ipv4Addr::from_str("10.14.23.123").unwrap())
         ));
 

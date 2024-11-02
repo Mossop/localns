@@ -16,7 +16,7 @@ use tracing::instrument;
 
 use crate::{
     backoff::Backoff,
-    dns::{RData, Record, RecordSet},
+    dns::{Fqdn, RData, Record, RecordSet},
     sources::{SourceConfig, SourceId, SourceType, SpawnHandle},
     util::Address,
     Error, RecordServer, SourceRecords,
@@ -240,13 +240,21 @@ fn generate_records(source_id: &SourceId, state: DockerState) -> RecordSet {
 
     for container in state.containers.values() {
         if let Some(hostname) = container.labels.get("localns.hostname") {
+            let fqdn = match Fqdn::try_from(hostname.as_str()) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::warn!(error=%e, hostname, "Error parsing container hostname label");
+                    continue;
+                }
+            };
+
             if let Some(network) = container.labels.get("localns.network") {
                 let mut seen = false;
 
                 for endpoint in container.networks.values() {
                     if &endpoint.network.name == network {
                         if let Some(ip) = endpoint.ip {
-                            records.insert(Record::new(hostname.into(), RData::A(ip)));
+                            records.insert(Record::new(fqdn.clone(), RData::A(ip)));
                             seen = true;
                         }
                     }
@@ -278,7 +286,7 @@ fn generate_records(source_id: &SourceId, state: DockerState) -> RecordSet {
                             "Cannot add record as it is present on multiple possible networks.",
                         );
                     } else {
-                        records.insert(Record::new(hostname.into(), RData::A(*ip)));
+                        records.insert(Record::new(fqdn.clone(), RData::A(*ip)));
                     }
                 } else {
                     tracing::warn!(
@@ -415,9 +423,9 @@ mod tests {
     use uuid::Uuid;
 
     use crate::{
-        dns::{Fqdn, RData},
+        dns::RData,
         sources::{docker::DockerConfig, SourceConfig, SourceId},
-        test::{name, SingleSourceServer},
+        test::{fqdn, name, SingleSourceServer},
     };
 
     #[tokio::test]
@@ -448,10 +456,10 @@ mod tests {
 
         match ip {
             IpAddr::V4(ip) => {
-                assert!(records.contains(&Fqdn::from("test1.home.local"), &RData::A(ip)));
+                assert!(records.contains(&fqdn("test1.home.local"), &RData::A(ip)));
             }
             IpAddr::V6(ip) => {
-                assert!(records.contains(&Fqdn::from("test1.home.local"), &RData::Aaaa(ip)));
+                assert!(records.contains(&fqdn("test1.home.local"), &RData::Aaaa(ip)));
             }
         }
 
@@ -477,10 +485,10 @@ mod tests {
 
         match ip {
             IpAddr::V4(ip) => {
-                assert!(records.contains(&Fqdn::from("test1.home.local"), &RData::A(ip)));
+                assert!(records.contains(&fqdn("test1.home.local"), &RData::A(ip)));
             }
             IpAddr::V6(ip) => {
-                assert!(records.contains(&Fqdn::from("test1.home.local"), &RData::Aaaa(ip)));
+                assert!(records.contains(&fqdn("test1.home.local"), &RData::Aaaa(ip)));
             }
         }
     }

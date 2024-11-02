@@ -112,13 +112,23 @@ fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, Error> {
             }
 
             (State::Backtick(st), '`') => {
-                hosts.push(st.into());
+                match Fqdn::try_from(st.as_str()) {
+                    Ok(fqdn) => hosts.push(fqdn),
+                    Err(e) => {
+                        tracing::warn!(error=%e, hostname = st, "Invalid hostname");
+                    }
+                }
                 State::Post
             }
             (State::Backtick(st), ch) => State::Backtick(format!("{}{}", st, ch)),
 
             (State::Quote(st), '"') => {
-                hosts.push(st.into());
+                match Fqdn::try_from(st.as_str()) {
+                    Ok(fqdn) => hosts.push(fqdn),
+                    Err(e) => {
+                        tracing::warn!(error=%e, hostname = st, "Invalid hostname");
+                    }
+                }
                 State::Post
             }
             (State::Quote(st), '\\') => State::EscapedQuote(st),
@@ -156,7 +166,13 @@ fn generate_records(
     let rdata = if let Some(address) = &traefik_config.address {
         address.clone()
     } else if let Some(host) = traefik_config.url.host_str() {
-        host.into()
+        match RData::try_from(host) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error=%e, host, "Invalid url");
+                return RecordSet::new();
+            }
+        }
     } else {
         return RecordSet::new();
     };
@@ -274,9 +290,9 @@ mod tests {
     use uuid::Uuid;
 
     use crate::{
-        dns::{Fqdn, RData},
+        dns::RData,
         sources::{traefik::TraefikConfig, SourceConfig, SourceId},
-        test::{name, traefik_container, SingleSourceServer},
+        test::{fqdn, name, traefik_container, SingleSourceServer},
     };
 
     #[test]
@@ -399,10 +415,7 @@ mod tests {
 
             assert_eq!(records.len(), 1);
 
-            assert!(records.contains(
-                &Fqdn::from("test.example.org"),
-                &RData::Cname(Fqdn::from("localhost"))
-            ));
+            assert!(records.contains(&fqdn("test.example.org"), &RData::Cname(fqdn("localhost"))));
 
             let config = TraefikConfig {
                 url: format!("http://localhost:{port}/api/").parse().unwrap(),
@@ -421,12 +434,12 @@ mod tests {
             assert_eq!(records.len(), 2);
 
             assert!(records.contains(
-                &Fqdn::from("test.example.org"),
+                &fqdn("test.example.org"),
                 &RData::A("10.10.15.23".parse().unwrap())
             ));
 
             assert!(records.contains(
-                &Fqdn::from("localhost"),
+                &fqdn("localhost"),
                 &RData::A("10.10.15.23".parse().unwrap())
             ));
 

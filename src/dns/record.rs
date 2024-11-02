@@ -4,17 +4,21 @@ use std::{
     hash::Hash,
     iter::{empty, once, Flatten},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    ops::Deref,
     str::FromStr,
 };
 
-use hickory_server::proto::rr::{self, rdata, DNSClass, Name, RecordType};
+use hickory_server::proto::{
+    error::ProtoError,
+    rr::{self, rdata, DNSClass, IntoName, Name, RecordType},
+};
 use serde::{Deserialize, Serialize};
 
 use crate::config::ZoneConfig;
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Hash)]
 #[serde(tag = "type", content = "value")]
-pub enum RData {
+pub(crate) enum RData {
     A(Ipv4Addr),
     Aaaa(Ipv6Addr),
     Cname(Fqdn),
@@ -22,19 +26,12 @@ pub enum RData {
 }
 
 impl RData {
-    pub fn data_type(&self) -> RecordType {
+    pub(crate) fn data_type(&self) -> RecordType {
         match self {
             RData::A(_) => RecordType::A,
             RData::Aaaa(_) => RecordType::AAAA,
             RData::Cname(_) => RecordType::CNAME,
             RData::Ptr(_) => RecordType::PTR,
-        }
-    }
-
-    pub fn is_valid(&self) -> bool {
-        match self {
-            RData::Cname(name) | RData::Ptr(name) => name.is_valid(),
-            _ => true,
         }
     }
 }
@@ -46,14 +43,8 @@ impl TryInto<rr::RData> for RData {
         match self {
             RData::A(ip) => Ok(rr::RData::A(ip.into())),
             RData::Aaaa(ip) => Ok(rr::RData::AAAA(ip.into())),
-            RData::Cname(name) => match name {
-                Fqdn::Valid(name) => Ok(rr::RData::CNAME(rdata::CNAME(name))),
-                Fqdn::Invalid(str) => Err(format!("Invalid name: {}", str)),
-            },
-            RData::Ptr(name) => match name {
-                Fqdn::Valid(name) => Ok(rr::RData::PTR(rdata::PTR(name))),
-                Fqdn::Invalid(str) => Err(format!("Invalid name: {}", str)),
-            },
+            RData::Cname(name) => Ok(rr::RData::CNAME(rdata::CNAME(name.into()))),
+            RData::Ptr(name) => Ok(rr::RData::PTR(rdata::PTR(name.into()))),
         }
     }
 }
@@ -79,89 +70,64 @@ impl From<Ipv4Addr> for RData {
     }
 }
 
-impl From<String> for RData {
-    fn from(str: String) -> Self {
-        Self::from(str.as_str())
-    }
-}
+impl TryFrom<&str> for RData {
+    type Error = ProtoError;
 
-impl From<&str> for RData {
-    fn from(str: &str) -> Self {
-        match IpAddr::from_str(str) {
-            Ok(ip) => ip.into(),
-            Err(_) => RData::Cname(str.into()),
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match IpAddr::from_str(s) {
+            Ok(ip) => Ok(ip.into()),
+            Err(_) => {
+                let fqdn = Fqdn::try_from(s)?;
+                Ok(RData::Cname(fqdn))
+            }
         }
     }
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[serde(from = "String")]
+#[serde(try_from = "String")]
 #[serde(into = "String")]
-pub enum Fqdn {
-    Valid(Name),
-    Invalid(String),
+pub(crate) struct Fqdn {
+    name: Name,
 }
 
 impl Fqdn {
-    pub fn is_valid(&self) -> bool {
-        matches!(self, Fqdn::Valid(_))
+    pub(crate) fn name(&self) -> Name {
+        self.name.clone()
     }
 
-    pub fn child<S>(&self, host: S) -> Self
+    pub(crate) fn child<I>(&self, host: I) -> Result<Self, ProtoError>
     where
-        S: AsRef<str>,
+        I: IntoName,
     {
-        match self {
-            Fqdn::Valid(name) => match Name::parse(host.as_ref(), Some(name)) {
-                Ok(name) => name.into(),
-                Err(e) => {
-                    let full = format!("{}.{}", host.as_ref(), name);
-                    tracing::warn!(name = full, error = %e, "Invalid domain name");
-                    Fqdn::Invalid(full)
-                }
-            },
-            Fqdn::Invalid(domain) => Fqdn::Invalid(format!("{}.{}", host.as_ref(), domain)),
-        }
-    }
-
-    pub fn is_parent(&self, other: &Fqdn) -> bool {
-        match (self, other) {
-            (Fqdn::Valid(s), Fqdn::Valid(o)) => s.zone_of(o),
-            (_, Fqdn::Valid(_)) => {
-                // If the child is valid then we would have to be valid.
-                false
-            }
-            _ => {
-                let domain = format!(".{}", self);
-                let child = other.to_string();
-                child.ends_with(&domain)
-            }
-        }
-    }
-
-    pub fn name(&self) -> Option<&Name> {
-        match self {
-            Fqdn::Valid(name) => Some(name),
-            _ => None,
-        }
+        let host = host.into_name()?;
+        Ok(host.append_domain(self)?.into())
     }
 }
 
 impl fmt::Debug for Fqdn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Fqdn::Valid(n) => write!(f, "{n}"),
-            Fqdn::Invalid(s) => write!(f, "INVALID({s})"),
-        }
+        fmt::Debug::fmt(&self.name, f)
     }
 }
 
 impl fmt::Display for Fqdn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Fqdn::Valid(name) => f.pad(&name.to_string()),
-            Fqdn::Invalid(str) => f.pad(str),
-        }
+        fmt::Display::fmt(&self.name, f)
+    }
+}
+
+impl From<Fqdn> for Name {
+    fn from(fqdn: Fqdn) -> Name {
+        fqdn.name
+    }
+}
+
+impl Deref for Fqdn {
+    type Target = Name;
+
+    fn deref(&self) -> &Self::Target {
+        &self.name
     }
 }
 
@@ -174,57 +140,30 @@ impl From<Fqdn> for String {
 impl From<Name> for Fqdn {
     fn from(name: Name) -> Self {
         assert!(name.is_fqdn());
-        Fqdn::Valid(name)
+        Fqdn { name }
     }
 }
 
-impl From<String> for Fqdn {
-    fn from(str: String) -> Self {
-        match Name::parse(&str, None) {
-            Ok(mut name) => {
-                name.set_fqdn(true);
-                name.into()
-            }
-            Err(e) => {
-                tracing::warn!(name = str, error = %e, "Invalid domain name");
-                Fqdn::Invalid(str)
-            }
-        }
+impl TryFrom<&str> for Fqdn {
+    type Error = ProtoError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        let mut name = Name::from_str(s)?;
+        name.set_fqdn(true);
+        Ok(name.into())
     }
 }
 
-impl From<&String> for Fqdn {
-    fn from(str: &String) -> Self {
-        match Name::parse(str.as_str(), None) {
-            Ok(mut name) => {
-                name.set_fqdn(true);
-                Fqdn::Valid(name)
-            }
-            Err(e) => {
-                tracing::warn!(name = str, error = %e, "Invalid domain name");
-                Fqdn::Invalid(str.clone())
-            }
-        }
-    }
-}
+impl TryFrom<String> for Fqdn {
+    type Error = ProtoError;
 
-impl From<&str> for Fqdn {
-    fn from(str: &str) -> Self {
-        match Name::parse(str, None) {
-            Ok(mut name) => {
-                name.set_fqdn(true);
-                Fqdn::Valid(name)
-            }
-            Err(e) => {
-                tracing::warn!(name = str, error = %e, "Invalid domain name");
-                Fqdn::Invalid(str.into())
-            }
-        }
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Self::try_from(s.as_str())
     }
 }
 
 #[derive(Debug, PartialEq, Hash, Eq, Clone)]
-pub enum RecordSource {
+pub(crate) enum RecordSource {
     Local,
     Remote,
 }
@@ -234,12 +173,12 @@ fn remote_source() -> RecordSource {
 }
 
 #[derive(PartialEq, Hash, Eq, Clone, Deserialize, Serialize)]
-pub struct Record {
+pub(crate) struct Record {
     name: Fqdn,
     #[serde(skip)]
     #[serde(default = "remote_source")]
-    pub source: RecordSource,
-    pub ttl: Option<u32>,
+    pub(crate) source: RecordSource,
+    pub(crate) ttl: Option<u32>,
     rdata: RData,
 }
 
@@ -260,7 +199,7 @@ impl fmt::Debug for Record {
 }
 
 impl Record {
-    pub fn new(name: Fqdn, rdata: RData) -> Self {
+    pub(crate) fn new(name: Fqdn, rdata: RData) -> Self {
         if let RData::Cname(ref alias) = rdata {
             if &name == alias {
                 panic!("Attempted to create a CNAME cycle with {}", name);
@@ -275,20 +214,16 @@ impl Record {
         }
     }
 
-    pub fn name(&self) -> &Fqdn {
+    pub(crate) fn name(&self) -> &Fqdn {
         &self.name
     }
 
-    pub fn rdata(&self) -> &RData {
+    pub(crate) fn rdata(&self) -> &RData {
         &self.rdata
     }
 
-    pub fn is_valid(&self) -> bool {
-        self.name.is_valid() && self.rdata.is_valid()
-    }
-
     pub(crate) fn raw(&self, config: &ZoneConfig) -> Option<rr::Record> {
-        let name = self.name().name()?;
+        let name = self.name().name();
         let data: rr::RData = self.rdata.clone().try_into().ok()?;
 
         Some(rr::Record::from_rdata(
@@ -302,7 +237,7 @@ impl Record {
 #[derive(Default, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(from = "Vec<Record>")]
 #[serde(into = "Vec<Record>")]
-pub struct RecordSet {
+pub(crate) struct RecordSet {
     records: HashMap<Fqdn, HashSet<Record>>,
     reverse: HashMap<IpAddr, Record>,
     names: HashSet<Name>,
@@ -331,12 +266,12 @@ impl fmt::Debug for RecordSet {
 }
 
 impl RecordSet {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Default::default()
     }
 
     #[cfg(test)]
-    pub fn contains(&self, name: &Fqdn, rdata: &RData) -> bool {
+    pub(crate) fn contains(&self, name: &Fqdn, rdata: &RData) -> bool {
         self.records
             .get(name)
             .map(|records| records.iter().any(|r| r.rdata == *rdata))
@@ -344,7 +279,7 @@ impl RecordSet {
     }
 
     #[cfg(test)]
-    pub fn contains_reverse<I: Into<IpAddr>>(&self, ip: I, name: &Fqdn) -> bool {
+    pub(crate) fn contains_reverse<I: Into<IpAddr>>(&self, ip: I, name: &Fqdn) -> bool {
         self.reverse
             .get(&ip.into())
             .map(|r| {
@@ -357,34 +292,31 @@ impl RecordSet {
             .unwrap_or_default()
     }
 
-    pub fn has_name(&self, name: &Name) -> bool {
+    #[cfg(test)]
+    pub(crate) fn has_name(&self, name: &Name) -> bool {
         self.names.contains(name)
     }
 
-    pub fn records(&self) -> impl Iterator<Item = &Record> {
+    pub(crate) fn records(&self) -> impl Iterator<Item = &Record> {
         self.records.values().flatten()
     }
 
-    fn apply_records<T>(&mut self, name: &Fqdn, records: T)
+    fn apply_records<T>(&mut self, fqdn: &Fqdn, records: T)
     where
         T: Iterator<Item = Record>,
     {
-        if let Some(mut name) = name.name().cloned() {
-            self.names.insert(name.clone());
-            while name.num_labels() > 1 {
-                name = name.trim_to(name.num_labels() as usize - 1);
-                self.names.insert(name.clone());
-            }
-        } else {
-            // Invalid name, skip.
-            return;
+        let mut name = fqdn.name();
+        self.names.insert(name.clone());
+        while name.num_labels() > 1 {
+            name = name.trim_to(name.num_labels() as usize - 1);
+            self.names.insert(fqdn.name());
         }
 
-        let inner = self.records.entry(name.clone()).or_default();
+        let inner = self.records.entry(fqdn.clone()).or_default();
         for record in records {
-            assert_eq!(record.name(), name);
+            assert_eq!(record.name(), fqdn);
 
-            if record.is_valid() && !inner.contains(&record) {
+            if !inner.contains(&record) {
                 match record.rdata() {
                     RData::A(ip) => {
                         let mut ptr =
@@ -406,17 +338,17 @@ impl RecordSet {
         }
     }
 
-    pub fn append(&mut self, records: RecordSet) {
+    pub(crate) fn append(&mut self, records: RecordSet) {
         for (name, records) in records.records {
             self.apply_records(&name, records.into_iter());
         }
     }
 
-    pub fn insert(&mut self, record: Record) {
+    pub(crate) fn insert(&mut self, record: Record) {
         self.apply_records(&record.name().clone(), once(record));
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         let mut count: usize = 0;
         for records in self.records.values() {
             count += records.len()
@@ -424,7 +356,7 @@ impl RecordSet {
         count
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         for records in self.records.values() {
             if !records.is_empty() {
                 return false;
@@ -434,7 +366,7 @@ impl RecordSet {
         true
     }
 
-    pub fn lookup(
+    pub(crate) fn lookup(
         &self,
         name: &Name,
         dns_class: DNSClass,
@@ -531,8 +463,8 @@ mod tests {
     #[test]
     fn fqdn() {
         assert_eq!(
-            Fqdn::from("test.example.com."),
-            Fqdn::from("test.example.com")
+            Fqdn::try_from("test.example.com.").unwrap(),
+            Fqdn::try_from("test.example.com").unwrap()
         );
     }
 }

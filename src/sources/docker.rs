@@ -137,17 +137,7 @@ fn check_file(file: &Path) -> Result<(), Error> {
 }
 
 fn useful_event(ev: &models::EventMessage) -> bool {
-    if let (Some(models::EventMessageTypeEnum::CONTAINER), Some(action)) =
-        (ev.typ, ev.action.as_deref())
-    {
-        if let Some(pos) = action.find(':') {
-            !matches!(&action[..pos], "exec_create" | "exec_start")
-        } else {
-            !matches!(action, "exec_die")
-        }
-    } else {
-        true
-    }
+    matches!(ev.typ, Some(models::EventMessageTypeEnum::CONTAINER))
 }
 
 #[instrument(fields(%source_id), skip(docker_config))]
@@ -414,5 +404,84 @@ impl SourceConfig for DockerConfig {
         };
 
         Ok(SpawnHandle { handle })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::IpAddr;
+
+    use testcontainers::{runners::AsyncRunner, GenericImage};
+    use uuid::Uuid;
+
+    use crate::{
+        dns::{Fqdn, RData},
+        sources::{docker::DockerConfig, SourceConfig, SourceId},
+        test::{name, SingleSourceServer},
+    };
+
+    #[tokio::test]
+    async fn integration() {
+        let test_container = GenericImage::new("localns_test_empty", "latest")
+            .start()
+            .await
+            .unwrap();
+        let ip = test_container.get_bridge_ip_address().await.unwrap();
+
+        let source_id = SourceId {
+            server_id: Uuid::new_v4(),
+            source_type: DockerConfig::source_type(),
+            source_name: "test".to_string(),
+        };
+
+        let config = DockerConfig::Local;
+
+        let mut test_server = SingleSourceServer::new(&source_id);
+
+        let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
+
+        let records = test_server
+            .wait_for_records(|records| records.has_name(&name("test1.home.local.")))
+            .await;
+
+        assert_eq!(records.len(), 1);
+
+        match ip {
+            IpAddr::V4(ip) => {
+                assert!(records.contains(&Fqdn::from("test1.home.local"), &RData::A(ip)));
+            }
+            IpAddr::V6(ip) => {
+                assert!(records.contains(&Fqdn::from("test1.home.local"), &RData::Aaaa(ip)));
+            }
+        }
+
+        test_container.rm().await.unwrap();
+
+        let records = test_server
+            .wait_for_records(|records| !records.has_name(&name("test1.home.local.")))
+            .await;
+
+        assert!(records.is_empty());
+
+        let test_container = GenericImage::new("localns_test_empty", "latest")
+            .start()
+            .await
+            .unwrap();
+        let ip = test_container.get_bridge_ip_address().await.unwrap();
+
+        let records = test_server
+            .wait_for_records(|records| records.has_name(&name("test1.home.local.")))
+            .await;
+
+        assert_eq!(records.len(), 1);
+
+        match ip {
+            IpAddr::V4(ip) => {
+                assert!(records.contains(&Fqdn::from("test1.home.local"), &RData::A(ip)));
+            }
+            IpAddr::V6(ip) => {
+                assert!(records.contains(&Fqdn::from("test1.home.local"), &RData::Aaaa(ip)));
+            }
+        }
     }
 }

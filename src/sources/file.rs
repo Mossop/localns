@@ -107,7 +107,7 @@ mod tests {
 
     use crate::{
         dns::{Fqdn, RData},
-        sources::{file::FileConfig, SourceConfig, SourceId, SourceType},
+        sources::{file::FileConfig, SourceConfig, SourceId},
         test::{name, write_file, SingleSourceServer},
     };
 
@@ -128,7 +128,7 @@ other.home.local: www.home.local
 
         let source_id = SourceId {
             server_id: Uuid::new_v4(),
-            source_type: SourceType::File,
+            source_type: FileConfig::source_type(),
             source_name: "test".to_string(),
         };
 

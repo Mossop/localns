@@ -117,7 +117,7 @@ mod tests {
 
     use crate::{
         dns::{Fqdn, RData},
-        sources::{dhcp::DhcpConfig, SourceConfig, SourceId, SourceType},
+        sources::{dhcp::DhcpConfig, SourceConfig, SourceId},
         test::{name, write_file, SingleSourceServer},
     };
 
@@ -133,6 +133,7 @@ mod tests {
 1646820540 08:aa:0b:47:a3:f8 10.10.1.163 moto-power 01:08:aa:0b:47:a3:f8
 1646820689 08:aa:7a:70:15:f6 10.10.1.207 moto-stylus 01:08:aa:7a:70:15:f6
 1646820666 f4:d4:ac:db:a5:4c 10.10.1.159 takagi 01:f4:d4:ac:db:a5:4c
+bad line
 1646820343 f8:0f:01:74:83:c2 10.10.1.240 nest-office *
 1646820846 74:d4:8c:85:c2:7a 10.10.15.230 mandelbrot ff:56:50:4d:98:00:02:00:00:ab:11:31:cd:b5:50:8c:85:c2:7a
         "#,
@@ -178,7 +179,7 @@ mod tests {
 
         let source_id = SourceId {
             server_id: Uuid::new_v4(),
-            source_type: SourceType::Dhcp,
+            source_type: DhcpConfig::source_type(),
             source_name: "test".to_string(),
         };
 

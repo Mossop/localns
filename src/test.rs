@@ -363,6 +363,7 @@ mod integration {
         compare_servers(left, right, name, record_type, true).await;
     }
 
+    #[tracing_test::traced_test]
     #[tokio::test(flavor = "multi_thread")]
     async fn test1() {
         let temp_dir = TempDir::new().unwrap();
@@ -464,6 +465,74 @@ zones:
             localns_address,
             &core_address,
             &name("foo.example.org."),
+            RecordType::A,
+            true,
+        )
+        .await;
+
+        let response = lookup(
+            localns_address,
+            &name("baz.example.org."),
+            RecordType::A,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.response_code(), ResponseCode::NoError);
+        let mut answers = response.answers().to_vec();
+        answers.sort();
+        assert_eq!(answers.len(), 2);
+
+        let answer = answers.first().unwrap();
+        assert_eq!(answer.name(), &name("bar.example.org."));
+        match answer.data().unwrap() {
+            RData::A(a) => {
+                // TODO correct this.
+                assert_eq!(a.0, "37.23.54.10".parse::<Ipv4Addr>().unwrap());
+            }
+            o => {
+                panic!("Expected record to be an A record but got {o:?}");
+            }
+        }
+
+        let answer = answers.get(1).unwrap();
+        assert_eq!(answer.name(), &name("baz.example.org."));
+        match answer.data().unwrap() {
+            RData::CNAME(cname) => {
+                assert_eq!(cname.0, name("bar.example.org."));
+            }
+            o => {
+                panic!("Expected record to be an A record but got {o:?}");
+            }
+        }
+
+        write_file(
+            &config_file,
+            format!(
+                r#"
+server:
+  port: 53531
+
+sources:
+  file:
+    file1: {}/file3.yml
+
+zones:
+  example.org:
+    upstream: "[::1]:{}"
+"#,
+                test_dir.display(),
+                core_port
+            ),
+        )
+        .await;
+
+        wait_for_response(localns_address, &name("rotty.example.org."), RecordType::A).await;
+
+        compare_servers(
+            localns_address,
+            &core_address,
+            &name("rotty.example.org."),
             RecordType::A,
             true,
         )

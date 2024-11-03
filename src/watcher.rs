@@ -135,6 +135,7 @@ mod tests {
         }
     }
 
+    #[tracing_test::traced_test]
     #[tokio::test(flavor = "multi_thread")]
     async fn watcher() {
         let (sender, mut receiver) = unbounded_channel();

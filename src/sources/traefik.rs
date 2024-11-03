@@ -295,6 +295,7 @@ mod tests {
         test::{fqdn, name, traefik_container, SingleSourceServer},
     };
 
+    #[tracing_test::traced_test]
     #[test]
     fn parse_hosts() {
         fn do_parse(rule: &str) -> Vec<String> {
@@ -371,6 +372,7 @@ mod tests {
         );
     }
 
+    #[tracing_test::traced_test]
     #[tokio::test]
     async fn integration() {
         let (_handle, mut test_server) = {

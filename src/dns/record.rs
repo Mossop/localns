@@ -458,6 +458,7 @@ impl From<RecordSet> for Vec<Record> {
 mod tests {
     use crate::dns::Fqdn;
 
+    #[tracing_test::traced_test]
     #[test]
     fn fqdn() {
         assert_eq!(

@@ -194,6 +194,7 @@ mod tests {
         test::{fqdn, write_file},
     };
 
+    #[tracing_test::traced_test]
     #[tokio::test]
     async fn parse_config() {
         let temp = TempDir::new().unwrap();

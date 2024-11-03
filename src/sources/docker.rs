@@ -428,6 +428,7 @@ mod tests {
         test::{fqdn, name, SingleSourceServer},
     };
 
+    #[tracing_test::traced_test]
     #[tokio::test]
     async fn integration() {
         let test_container = GenericImage::new("localns_test_empty", "latest")

@@ -256,6 +256,7 @@ mod tests {
         test::{fqdn, name, write_file, MultiSourceServer},
     };
 
+    #[tracing_test::traced_test]
     #[tokio::test(flavor = "multi_thread")]
     async fn integration() {
         let temp = TempDir::new().unwrap();

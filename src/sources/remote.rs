@@ -157,6 +157,7 @@ mod tests {
         test::{fqdn, name, SingleSourceServer},
     };
 
+    #[tracing_test::traced_test]
     #[tokio::test(flavor = "multi_thread")]
     async fn integration() {
         let mut api_records = RecordSet::default();

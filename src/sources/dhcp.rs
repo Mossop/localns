@@ -135,6 +135,7 @@ mod tests {
         test::{fqdn, name, write_file, SingleSourceServer},
     };
 
+    #[tracing_test::traced_test]
     #[test]
     fn parse_hosts() {
         let zone = fqdn("home.local");
@@ -176,6 +177,7 @@ bad line
         ));
     }
 
+    #[tracing_test::traced_test]
     #[tokio::test(flavor = "multi_thread")]
     async fn integration() {
         let temp = TempDir::new().unwrap();

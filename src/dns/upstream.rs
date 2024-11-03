@@ -125,6 +125,7 @@ mod tests {
         util::{Address, Host},
     };
 
+    #[tracing_test::traced_test]
     #[tokio::test]
     async fn test_upstream() {
         let coredns = coredns_container(

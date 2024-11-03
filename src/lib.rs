@@ -164,6 +164,11 @@ impl Server {
         Ok(server)
     }
 
+    #[cfg(test)]
+    pub(crate) async fn records(&self) -> RecordSet {
+        self.server_state.records.read().await.clone()
+    }
+
     pub async fn shutdown(self) {
         tracing::info!("Server shutting down");
 
@@ -278,5 +283,132 @@ impl RecordServer for Server {
         };
 
         self.server_state.replace_records(records).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, Utc};
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::{
+        dns::{RData, Record},
+        sources::SourceType,
+        test::{fqdn, write_file},
+    };
+
+    #[tracing_test::traced_test]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn record_server() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_file = temp_dir.path().join("config.yml");
+
+        write_file(
+            &config_file,
+            r#"
+server:
+  port: 53531
+"#,
+        )
+        .await;
+
+        let server = Server::new(&config_file).await.unwrap();
+
+        let source_id_1 = SourceId::new(&Uuid::new_v4(), SourceType::File, "test");
+
+        let mut records_1 = RecordSet::new();
+        records_1.insert(Record::new(
+            fqdn("www.example.org"),
+            RData::Cname(fqdn("other.example.org")),
+        ));
+
+        let now = Utc::now();
+        server
+            .add_source_records(SourceRecords::new(
+                &source_id_1,
+                Some(now),
+                records_1.clone(),
+            ))
+            .await;
+
+        let server_records = server.records().await;
+        assert_eq!(server_records.len(), 1);
+        assert!(server_records.contains(
+            &fqdn("www.example.org"),
+            &RData::Cname(fqdn("other.example.org"))
+        ));
+
+        server
+            .add_source_records(SourceRecords::new(
+                &source_id_1,
+                Some(now),
+                records_1.clone(),
+            ))
+            .await;
+
+        let server_records = server.records().await;
+        assert_eq!(server_records.len(), 1);
+        assert!(server_records.contains(
+            &fqdn("www.example.org"),
+            &RData::Cname(fqdn("other.example.org"))
+        ));
+
+        records_1.insert(Record::new(
+            fqdn("old.example.org"),
+            RData::Cname(fqdn("other.example.org")),
+        ));
+
+        server
+            .add_source_records(SourceRecords::new(
+                &source_id_1,
+                Some(now - Duration::days(1)),
+                records_1.clone(),
+            ))
+            .await;
+
+        let server_records = server.records().await;
+        assert_eq!(server_records.len(), 1);
+        assert!(server_records.contains(
+            &fqdn("www.example.org"),
+            &RData::Cname(fqdn("other.example.org"))
+        ));
+
+        let source_id_2 = SourceId::new(&Uuid::new_v4(), SourceType::Docker, "test");
+
+        let mut records_2 = RecordSet::new();
+        records_2.insert(Record::new(
+            fqdn("other.data.com"),
+            RData::Cname(fqdn("www.data.com")),
+        ));
+
+        server
+            .add_source_records(SourceRecords::new(&source_id_2, None, records_2.clone()))
+            .await;
+
+        let server_records = server.records().await;
+        assert_eq!(server_records.len(), 2);
+        assert!(server_records.contains(
+            &fqdn("www.example.org"),
+            &RData::Cname(fqdn("other.example.org"))
+        ));
+        assert!(
+            server_records.contains(&fqdn("other.data.com"), &RData::Cname(fqdn("www.data.com")))
+        );
+
+        let mut keep = HashSet::new();
+        keep.insert(source_id_2.clone());
+        server.prune_sources(&keep).await;
+
+        let server_records = server.records().await;
+        assert_eq!(server_records.len(), 1);
+        assert!(
+            server_records.contains(&fqdn("other.data.com"), &RData::Cname(fqdn("www.data.com")))
+        );
+
+        server.clear_source_records(&source_id_2).await;
+
+        let server_records = server.records().await;
+        assert!(server_records.is_empty());
     }
 }

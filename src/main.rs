@@ -1,8 +1,8 @@
-use std::{env, io, path::PathBuf, sync::Arc};
+use std::{env, io, path::PathBuf};
 
 use clap::Parser;
 use localns::{Error, Server};
-use tokio::sync::Notify;
+use tokio::signal;
 use tracing_subscriber::{
     filter::Builder, layer::SubscriberExt, util::SubscriberInitExt, Layer, Registry,
 };
@@ -24,15 +24,7 @@ fn config_file(arg: Option<&str>) -> PathBuf {
 }
 
 async fn wait_for_termination() {
-    let notify = Arc::new(Notify::new());
-
-    let notifier = notify.clone();
-    ctrlc::set_handler(move || {
-        notifier.notify_one();
-    })
-    .unwrap();
-
-    notify.notified().await;
+    signal::ctrl_c().await.unwrap();
 }
 
 async fn run() -> Result<(), Error> {

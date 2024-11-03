@@ -382,7 +382,7 @@ mod tests {
     test-router:
       entryPoints:
       - http
-      service: service-foo
+      service: test-service
       rule: Host(`test.example.org`)
 
   services:

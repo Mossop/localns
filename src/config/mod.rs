@@ -1,7 +1,8 @@
 use std::{
     collections::{HashMap, VecDeque},
-    fmt,
+    fmt, fs,
     path::Path,
+    process,
 };
 
 use figment::{
@@ -10,6 +11,7 @@ use figment::{
     Figment,
 };
 use hickory_server::proto::{rr, rr::rdata::SOA};
+use tracing::instrument;
 
 use crate::{
     api::ApiConfig,
@@ -168,13 +170,21 @@ pub(crate) struct Config {
 }
 
 impl Config {
+    #[instrument(fields(config_file = %config_file.display()), err)]
     pub(crate) fn from_file(config_file: &Path) -> Result<Config, Error> {
-        tracing::info!(config_file = %config_file.display(), "Reading configuration");
+        tracing::info!("Reading configuration");
 
         let config: file::ConfigFile = Figment::new()
             .join(Env::prefixed("LOCALNS_").map(map_env).lowercase(false))
             .join(Yaml::file_exact(config_file))
             .extract()?;
+
+        if let Some(path) = config.pid_file {
+            let id = process::id();
+            if let Err(e) = fs::write(path.relative(), id.to_string()) {
+                tracing::warn!(error=%e, "Failed to write PID file.");
+            }
+        }
 
         Ok(Config {
             server: config.server,
@@ -225,7 +235,7 @@ zones:
         )
         .await;
 
-        let config = Config::from_file(&config_file).unwrap();
+        let config = Config::from_file(&config_file).unwrap_or_default();
 
         let zone_config = config.zones.zone_config(&fqdn("nowhere.local"));
 

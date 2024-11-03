@@ -73,7 +73,7 @@ pub(crate) struct SourceId {
 }
 
 impl SourceId {
-    fn new(server_id: &ServerId, source_type: SourceType, source_name: &str) -> Self {
+    pub(crate) fn new(server_id: &ServerId, source_type: SourceType, source_name: &str) -> Self {
         Self {
             server_id: *server_id,
             source_type,

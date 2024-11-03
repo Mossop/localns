@@ -30,14 +30,43 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools
-
-      - name: Install helpers
-        run: sudo apt install kcov
 
       - name: Cargo check
         run: cargo check --all-features
+
+      - name: Build test containers
+        run: scripts/build_containers.sh
+
+      - name: Run tests
+        run: cargo test
+
+  coverage:
+    name: "Code coverage"
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install helpers
+        run: sudo apt install kcov jq
 
       - name: Build test containers
         run: scripts/build_containers.sh

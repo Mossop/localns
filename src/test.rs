@@ -300,6 +300,7 @@ mod integration {
 
         let query = Query::query(name.clone(), record_type);
         let mut options = DnsRequestOptions::default();
+        options.use_edns = true;
         options.recursion_desired = recurse;
 
         client.lookup(query, options).next().await?.ok()
@@ -485,26 +486,11 @@ zones:
 
         let answer = answers.first().unwrap();
         assert_eq!(answer.name(), &name("bar.example.org."));
-        match answer.data().unwrap() {
-            RData::A(a) => {
-                // TODO correct this.
-                assert_eq!(a.0, "37.23.54.10".parse::<Ipv4Addr>().unwrap());
-            }
-            o => {
-                panic!("Expected record to be an A record but got {o:?}");
-            }
-        }
+        assert_eq!(answer.data().unwrap(), &rdata_a("37.23.54.10"));
 
         let answer = answers.get(1).unwrap();
         assert_eq!(answer.name(), &name("baz.example.org."));
-        match answer.data().unwrap() {
-            RData::CNAME(cname) => {
-                assert_eq!(cname.0, name("bar.example.org."));
-            }
-            o => {
-                panic!("Expected record to be an A record but got {o:?}");
-            }
-        }
+        assert_eq!(answer.data().unwrap(), &rdata_cname("bar.example.org."));
 
         write_file(
             &config_file,

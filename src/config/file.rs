@@ -1,5 +1,6 @@
 use std::{collections::HashMap, fmt};
 
+use figment::value::magic::RelativePathBuf;
 use reqwest::Url;
 use serde::{
     de::{self, Visitor},
@@ -56,6 +57,9 @@ pub(super) struct PartialZoneConfig {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ConfigFile {
+    #[serde(default)]
+    pub(super) pid_file: Option<RelativePathBuf>,
+
     #[serde(default)]
     pub(super) defaults: DefaultZoneConfig,
 

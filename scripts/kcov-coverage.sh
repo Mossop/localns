@@ -1,15 +1,19 @@
 #! /bin/bash
 
 cargo clean
-mkdir -p target/cov
-CARGO_INCREMENTAL=0 RUSTFLAGS="-C link-dead-code" cargo test --tests --all-features --no-run
+mkdir -p target/cov/tests
+CWD=$(pwd)
+CARGO_INCREMENTAL=0 RUSTFLAGS="-C link-dead-code" \
+  cargo test --tests --all-features --no-run --message-format json \
+  | jq "select(.reason == \"compiler-artifact\" and .profile.test and .manifest_path == \"$CWD/Cargo.toml\")" \
+  > target/cov/tests.json
 
-for file in target/debug/deps/localns-*; do
-  [ -d "${file}" ] && continue
-  [ -x "${file}" ] || continue
-  mkdir -p "target/cov/$(basename $file)"
-  kcov --exclude-pattern=/.cargo --verify "target/cov/$(basename $file)" "$file"
+KCOV_ARGS="--exclude-pattern=/.cargo --verify --output-interval=0"
+
+for binary in $(cat target/cov/tests.json | jq -r 'select(.target.kind[0] == "test") | .executable'); do
+  RUST_BACKTRACE=1 KCOV=`which kcov` "$binary"
 done
 
-kcov --merge target/cov/localns target/cov/localns-*
-rm -rf target/cov/localns-*
+for binary in $(cat target/cov/tests.json | jq -r 'select(.target.kind[0] != "test") | .executable'); do
+  RUST_BACKTRACE=1 kcov $KCOV_ARGS "target/cov/$(basename $binary)" "$binary"
+done

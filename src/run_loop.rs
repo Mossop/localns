@@ -10,7 +10,6 @@ pub(crate) enum LoopResult {
     Quit,
 }
 
-#[derive(Clone)]
 pub(crate) struct RunLoop {
     default: u64,
     scaling: f64,

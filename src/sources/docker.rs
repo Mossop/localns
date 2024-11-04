@@ -11,12 +11,11 @@ use bollard::{models, Docker, API_DEFAULT_VERSION};
 use figment::value::magic::RelativePathBuf;
 use futures::StreamExt;
 use serde::Deserialize;
-use tokio::time::sleep;
 use tracing::instrument;
 
 use crate::{
-    backoff::Backoff,
     dns::{Fqdn, RData, Record, RecordSet},
+    run_loop::{LoopResult, RunLoop},
     sources::{SourceConfig, SourceId, SourceType, SpawnHandle},
     util::Address,
     Error, RecordServer, SourceRecords,
@@ -301,17 +300,12 @@ fn generate_records(source_id: &SourceId, state: DockerState) -> RecordSet {
     records
 }
 
-enum LoopResult {
-    Backoff,
-    Retry,
-}
-
 async fn docker_loop<S: RecordServer>(
-    source_id: &SourceId,
-    docker_config: &DockerConfig,
-    server: &S,
+    server: S,
+    source_id: SourceId,
+    docker_config: DockerConfig,
 ) -> LoopResult {
-    let docker = match connect(source_id, docker_config) {
+    let docker = match connect(&source_id, &docker_config) {
         Ok(docker) => docker,
         Err(e) => {
             tracing::error!(%source_id, error=%e, "Error connecting to docker");
@@ -345,9 +339,9 @@ async fn docker_loop<S: RecordServer>(
         }
     };
 
-    let records = generate_records(source_id, state);
+    let records = generate_records(&source_id, state);
     server
-        .add_source_records(SourceRecords::new(source_id, None, records))
+        .add_source_records(SourceRecords::new(&source_id, None, records))
         .await;
 
     let mut events = docker.events::<&str>(None);
@@ -363,14 +357,14 @@ async fn docker_loop<S: RecordServer>(
                         }
                     };
 
-                    let records = generate_records(source_id, state);
+                    let records = generate_records(&source_id, state);
                     server
-                        .add_source_records(SourceRecords::new(source_id, None, records))
+                        .add_source_records(SourceRecords::new(&source_id, None, records))
                         .await;
                 }
             }
             _ => {
-                return LoopResult::Retry;
+                return LoopResult::Sleep;
             }
         }
     }
@@ -392,23 +386,14 @@ impl SourceConfig for DockerConfig {
         tracing::trace!("Adding source");
 
         let handle = {
-            let source_id = source_id.clone();
-            let server = server.clone();
-            tokio::spawn(async move {
-                let mut backoff = Backoff::default();
+            let backoff = RunLoop::new(5000);
+            let config = self.clone();
 
-                loop {
-                    match docker_loop(&source_id, &self, &server).await {
-                        LoopResult::Backoff => {
-                            server.clear_source_records(&source_id).await;
-                            sleep(backoff.next()).await;
-                        }
-                        LoopResult::Retry => {
-                            backoff.reset();
-                        }
-                    }
-                }
-            })
+            tokio::spawn(
+                backoff.run(server.clone(), source_id, move |server, source_id| {
+                    docker_loop(server, source_id, config.clone())
+                }),
+            )
         };
 
         Ok(SpawnHandle { handle })

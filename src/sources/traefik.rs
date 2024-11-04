@@ -1,15 +1,12 @@
-use std::time::Duration;
-
 use anyhow::bail;
 use reqwest::{Client, Url};
 use serde::{de::DeserializeOwned, Deserialize};
-use tokio::time::sleep;
 use tracing::instrument;
 
 use crate::{
-    backoff::Backoff,
     config::deserialize_url,
     dns::{Fqdn, RData, Record, RecordSet},
+    run_loop::{LoopResult, RunLoop},
     sources::{SourceConfig, SourceId, SourceType, SpawnHandle},
     Error, RecordServer, SourceRecords,
 };
@@ -37,11 +34,6 @@ struct ApiVersion {
     version: String,
     #[serde(rename = "Codename")]
     _code_name: String,
-}
-
-enum LoopResult {
-    Backoff,
-    Quit,
 }
 
 #[instrument(fields(%source_id, %base_url), skip(client))]
@@ -200,10 +192,10 @@ fn generate_records(
 }
 
 async fn traefik_loop<S: RecordServer>(
-    source_id: &SourceId,
-    traefik_config: &TraefikConfig,
-    client: &Client,
-    server: &S,
+    server: S,
+    source_id: SourceId,
+    traefik_config: TraefikConfig,
+    client: Client,
 ) -> LoopResult {
     tracing::trace!(
         %source_id,
@@ -211,7 +203,7 @@ async fn traefik_loop<S: RecordServer>(
     );
 
     let version =
-        match api_call::<ApiVersion>(source_id, client, &traefik_config.url, "version").await {
+        match api_call::<ApiVersion>(&source_id, &client, &traefik_config.url, "version").await {
             Ok(r) => r,
             Err(result) => return result,
         };
@@ -222,29 +214,20 @@ async fn traefik_loop<S: RecordServer>(
         "Connected to traefik",
     );
 
-    loop {
-        let routers = match api_call::<Vec<ApiRouter>>(
-            source_id,
-            client,
-            &traefik_config.url,
-            "http/routers",
-        )
-        .await
+    let routers =
+        match api_call::<Vec<ApiRouter>>(&source_id, &client, &traefik_config.url, "http/routers")
+            .await
         {
             Ok(r) => r,
             Err(result) => return result,
         };
 
-        let records = generate_records(source_id, traefik_config, routers);
-        server
-            .add_source_records(SourceRecords::new(source_id, None, records))
-            .await;
-
-        sleep(Duration::from_millis(
-            traefik_config.interval_ms.unwrap_or(POLL_INTERVAL_MS),
-        ))
+    let records = generate_records(&source_id, &traefik_config, routers);
+    server
+        .add_source_records(SourceRecords::new(&source_id, None, records))
         .await;
-    }
+
+    LoopResult::Sleep
 }
 
 impl SourceConfig for TraefikConfig {
@@ -261,24 +244,15 @@ impl SourceConfig for TraefikConfig {
         server: &S,
     ) -> Result<SpawnHandle, Error> {
         let handle = {
-            let source_id = source_id.clone();
-            let server = server.clone();
-            tokio::spawn(async move {
-                let mut backoff = Backoff::default();
-                let client = Client::new();
+            let backoff = RunLoop::new(self.interval_ms.unwrap_or(POLL_INTERVAL_MS));
+            let client = Client::new();
+            let config = self.clone();
 
-                loop {
-                    match traefik_loop(&source_id, &self, &client, &server).await {
-                        LoopResult::Backoff => {
-                            server.clear_source_records(&source_id).await;
-                            sleep(backoff.next()).await;
-                        }
-                        LoopResult::Quit => {
-                            return;
-                        }
-                    }
-                }
-            })
+            tokio::spawn(
+                backoff.run(server.clone(), source_id, move |server, source_id| {
+                    traefik_loop(server, source_id, config.clone(), client.clone())
+                }),
+            )
         };
 
         Ok(SpawnHandle { handle })

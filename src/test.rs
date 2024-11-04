@@ -1,8 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
+    future::IntoFuture,
     net::Ipv4Addr,
     path::Path,
     str::FromStr,
+    sync::Arc,
     time::Duration,
 };
 
@@ -14,7 +16,12 @@ use testcontainers::{
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
-use tokio::{fs, io::AsyncWriteExt, sync::watch, time::timeout};
+use tokio::{
+    fs,
+    io::AsyncWriteExt,
+    sync::{watch, Mutex},
+    time,
+};
 
 use crate::{
     dns::{Fqdn, RecordSet},
@@ -22,8 +29,19 @@ use crate::{
     RecordServer,
 };
 
+async fn timeout<F, O>(fut: F) -> O
+where
+    F: IntoFuture<Output = O>,
+{
+    match time::timeout(Duration::from_secs(20), fut).await {
+        Ok(o) => o,
+        Err(_) => panic!("Timed out waiting for expected state"),
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct MultiSourceServer {
+    records: Arc<Mutex<HashMap<SourceId, RecordSet>>>,
     sender: watch::Sender<HashMap<SourceId, RecordSet>>,
     receiver: watch::Receiver<HashMap<SourceId, RecordSet>>,
 }
@@ -32,20 +50,22 @@ impl MultiSourceServer {
     pub(crate) fn new() -> Self {
         let (sender, receiver) = watch::channel(HashMap::new());
 
-        Self { sender, receiver }
+        Self {
+            records: Default::default(),
+            sender,
+            receiver,
+        }
     }
 
     pub(crate) async fn wait_for_change(&mut self) -> HashMap<SourceId, RecordSet> {
-        match timeout(Duration::from_secs(20), self.receiver.changed()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(_)) => panic!("Record stream closed"),
-            Err(_) => panic!("Timed out waiting for new records"),
-        }
+        timeout(self.receiver.changed())
+            .await
+            .expect("Record stream closed");
 
         self.receiver.borrow_and_update().clone()
     }
 
-    pub(crate) async fn wait_for_state<F>(&mut self, mut cb: F) -> HashMap<SourceId, RecordSet>
+    async fn wait_for_state<F>(&mut self, mut cb: F) -> HashMap<SourceId, RecordSet>
     where
         F: FnMut(&HashMap<SourceId, RecordSet>) -> bool,
     {
@@ -68,7 +88,7 @@ impl MultiSourceServer {
     where
         F: FnMut(&RecordSet) -> bool,
     {
-        self.wait_for_state(|map| {
+        timeout(self.wait_for_state(|map| {
             for record_set in map.values() {
                 if cb(record_set) {
                     return true;
@@ -76,7 +96,7 @@ impl MultiSourceServer {
             }
 
             false
-        })
+        }))
         .await
     }
 }
@@ -99,11 +119,13 @@ impl SingleSourceServer {
     where
         F: FnMut(Option<&RecordSet>) -> bool,
     {
-        self.inner
-            .wait_for_state(|map| cb(map.get(&self.source_id)))
-            .await
-            .get(&self.source_id)
-            .cloned()
+        timeout(
+            self.inner
+                .wait_for_state(|map| cb(map.get(&self.source_id))),
+        )
+        .await
+        .get(&self.source_id)
+        .cloned()
     }
 
     pub(crate) async fn wait_for_records<F>(&mut self, cb: F) -> RecordSet
@@ -137,28 +159,28 @@ impl RecordServer for SingleSourceServer {
 
 impl RecordServer for MultiSourceServer {
     async fn add_source_records(&self, new_records: SourceRecords) {
-        let mut new_set = self.receiver.borrow().clone();
-        new_set.insert(new_records.source_id, new_records.records);
-        self.sender.send(new_set).unwrap();
+        let mut records = self.records.lock().await;
+        records.insert(new_records.source_id, new_records.records);
+        self.sender.send(records.clone()).unwrap();
     }
 
     async fn clear_source_records(&self, source_id: &SourceId) {
-        let mut new_set = self.receiver.borrow().clone();
-        new_set.remove(source_id);
-        self.sender.send(new_set).unwrap();
+        let mut records = self.records.lock().await;
+        records.remove(source_id);
+        self.sender.send(records.clone()).unwrap();
     }
 
     async fn prune_sources(&self, keep: &HashSet<SourceId>) {
-        let mut new_set = self.receiver.borrow().clone();
-        for old_key in new_set
+        let mut records = self.records.lock().await;
+        for old_key in records
             .keys()
             .cloned()
             .collect::<HashSet<SourceId>>()
             .difference(keep)
         {
-            new_set.remove(old_key);
+            records.remove(old_key);
         }
-        self.sender.send(new_set).unwrap();
+        self.sender.send(records.clone()).unwrap();
     }
 }
 
@@ -306,28 +328,19 @@ mod integration {
         client.lookup(query, options).next().await?.ok()
     }
 
-    async fn wait_for_response_inner(address: &str, name: &Name, record_type: RecordType) {
-        loop {
-            if let Some(response) = lookup(address, name, record_type, true).await {
-                if response.response_code() == ResponseCode::NoError {
-                    return;
-                }
-            }
-
-            sleep(Duration::from_millis(100)).await;
-        }
-    }
-
     async fn wait_for_response(address: &str, name: &Name, record_type: RecordType) {
-        if timeout(
-            Duration::from_secs(5),
-            wait_for_response_inner(address, name, record_type),
-        )
+        timeout(async {
+            loop {
+                if let Some(response) = lookup(address, name, record_type, true).await {
+                    if response.response_code() == ResponseCode::NoError {
+                        return;
+                    }
+                }
+
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
         .await
-        .is_err()
-        {
-            panic!("Timed out waiting for response");
-        }
     }
 
     fn assert_records_eq(left: &[rr::Record], right: &[rr::Record]) {

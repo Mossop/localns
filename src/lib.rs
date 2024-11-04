@@ -1,8 +1,8 @@
 #![deny(unreachable_pub)]
 mod api;
-mod backoff;
 mod config;
 mod dns;
+mod run_loop;
 mod sources;
 #[cfg(test)]
 mod test;

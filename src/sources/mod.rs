@@ -92,6 +92,7 @@ impl fmt::Display for SourceId {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct SourceRecords {
     pub(crate) source_id: SourceId,
     pub(crate) timestamp: DateTime<Utc>,

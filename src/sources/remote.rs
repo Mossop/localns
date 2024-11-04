@@ -6,9 +6,9 @@ use tokio::time::sleep;
 use tracing::instrument;
 
 use crate::{
-    backoff::Backoff,
     config::deserialize_url,
     dns::RecordSet,
+    run_loop::{LoopResult, RunLoop},
     sources::{SourceConfig, SourceId, SourceType, SpawnHandle},
     Error, RecordServer, SourceRecords,
 };
@@ -21,11 +21,6 @@ pub(crate) struct RemoteConfig {
     url: Url,
     #[serde(default)]
     interval_ms: Option<u64>,
-}
-
-enum LoopResult {
-    Backoff,
-    Quit,
 }
 
 #[instrument(fields(%source_id, %base_url), skip(client))]
@@ -59,10 +54,10 @@ where
 }
 
 async fn remote_loop<S: RecordServer>(
-    source_id: &SourceId,
-    remote_config: &RemoteConfig,
-    client: &Client,
-    server: &S,
+    server: S,
+    source_id: SourceId,
+    remote_config: RemoteConfig,
+    client: Client,
 ) -> LoopResult {
     tracing::trace!(
         %source_id,
@@ -74,7 +69,7 @@ async fn remote_loop<S: RecordServer>(
 
     loop {
         let new_records =
-            match api_call::<RecordSet>(source_id, client, &remote_config.url, "records").await {
+            match api_call::<RecordSet>(&source_id, &client, &remote_config.url, "records").await {
                 Ok(r) => r,
                 Err(result) => return result,
             };
@@ -88,7 +83,7 @@ async fn remote_loop<S: RecordServer>(
             );
 
             server
-                .add_source_records(SourceRecords::new(source_id, None, records.clone()))
+                .add_source_records(SourceRecords::new(&source_id, None, records.clone()))
                 .await;
         }
 
@@ -115,24 +110,15 @@ impl SourceConfig for RemoteConfig {
         tracing::trace!("Adding source");
 
         let handle = {
-            let source_id = source_id.clone();
-            let server = server.clone();
-            tokio::spawn(async move {
-                let mut backoff = Backoff::default();
-                let client = Client::new();
+            let backoff = RunLoop::new(self.interval_ms.unwrap_or(POLL_INTERVAL_MS));
+            let client = Client::new();
+            let config = self.clone();
 
-                loop {
-                    match remote_loop(&source_id, &self, &client, &server).await {
-                        LoopResult::Backoff => {
-                            server.clear_source_records(&source_id).await;
-                            sleep(backoff.next()).await;
-                        }
-                        LoopResult::Quit => {
-                            return;
-                        }
-                    }
-                }
-            })
+            tokio::spawn(
+                backoff.run(server.clone(), source_id, move |server, source_id| {
+                    remote_loop(server, source_id, config.clone(), client.clone())
+                }),
+            )
         };
 
         Ok(SpawnHandle { handle })

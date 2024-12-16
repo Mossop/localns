@@ -26,7 +26,7 @@ hickory-client = "^0.24.1"
 async-trait = "^0.1.83"
 actix-web = "^4.3.1"
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 clap = { version = "4.5.23", features = ["derive"] }
 figment = { version = "0.10.19", features = ["yaml", "env"] }
 chrono = "0.4.39"

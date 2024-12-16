@@ -21,7 +21,7 @@ reqwest = { version = "^0.12.9", default-features = false, features = [
   "rustls-tls",
 ] }
 notify = "^7.0.0"
-hickory-server = "^0.24.1"
+hickory-server = "^0.24.2"
 hickory-client = "^0.24.2"
 async-trait = "^0.1.83"
 actix-web = "^4.3.1"

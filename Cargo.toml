@@ -13,7 +13,7 @@ default-run = "localns"
 [dependencies]
 bollard = { version = "^0.17.1", features = ["ssl"] }
 tokio = { version = "1.41.1", features = ["full"] }
-serde = "^1.0.215"
+serde = "^1.0.216"
 serde_yaml = "^0.9.34"
 futures = "^0.3.31"
 reqwest = { version = "^0.12.9", default-features = false, features = [

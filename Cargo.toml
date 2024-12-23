@@ -32,7 +32,7 @@ figment = { version = "0.10.19", features = ["yaml", "env"] }
 chrono = "0.4.39"
 uuid = { version = "1.11.0", features = ["v4"] }
 serde_plain = "1.0.2"
-anyhow = { version = "1.0.94", features = ["backtrace"] }
+anyhow = { version = "1.0.95", features = ["backtrace"] }
 
 [dev-dependencies]
 tempfile = "^3.14.0"

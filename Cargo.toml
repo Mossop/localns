@@ -23,7 +23,7 @@ reqwest = { version = "^0.12.9", default-features = false, features = [
 notify = "^7.0.0"
 hickory-server = "^0.24.2"
 hickory-client = "^0.24.2"
-async-trait = "^0.1.83"
+async-trait = "^0.1.84"
 actix-web = "^4.3.1"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }

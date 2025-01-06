@@ -195,6 +195,11 @@ duid 00:01:00:01:2f:0e:bf:99:00:e2:69:3e:6c:0a
 
         assert!(records.contains(
             &fqdn("caldigit.home.local"),
+            &RData::A(Ipv4Addr::from_str("10.10.1.24").unwrap())
+        ));
+
+        assert!(records.contains(
+            &fqdn("caldigit.home.local"),
             &RData::Aaaa(Ipv6Addr::from_str("2b02:c7a:7e12:5b00:1::26b7").unwrap())
         ));
 

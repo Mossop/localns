@@ -29,6 +29,10 @@ fn parse_dnsmasq(zone: &Fqdn, data: &str) -> RecordSet {
         }
 
         if let (Some(name), Some(ip)) = (parts.get(3), parts.get(2)) {
+            if *name == "*" {
+                continue;
+            }
+
             let name = match zone.child(*name) {
                 Ok(n) => n,
                 Err(e) => {
@@ -124,7 +128,10 @@ impl SourceConfig for DhcpConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::Ipv4Addr, str::FromStr};
+    use std::{
+        net::{Ipv4Addr, Ipv6Addr},
+        str::FromStr,
+    };
 
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -151,10 +158,15 @@ mod tests {
 bad line
 1646820343 f8:0f:01:74:83:c2 10.10.1.240 nest-office *
 1646820846 74:d4:8c:85:c2:7a 10.10.15.230 mandelbrot ff:56:50:4d:98:00:02:00:00:ab:11:31:cd:b5:50:8c:85:c2:7a
+duid 00:01:00:01:2f:0e:bf:99:00:e2:69:3e:6c:0a
+1736266946 1 2b02:c7a:7e12:5b00:1::26b7 caldigit 00:01:00:01:2f:0e:b5:f6:84:2f:57:64:43:9f
+1736266909 0 2b02:c7a:7e12:5b00:1::7a36 shashlik 00:01:00:01:2f:0e:b5:f6:84:2f:57:64:43:9f
+1736266908 0 2b02:c7a:7e12:5b00:1::36a3 * 00:03:00:01:92:c1:8f:99:66:8c
+1736266906 74879383 2a02:c7c:8e12:5b00:1::c8da tikka 00:02:00:00:ab:11:57:4e:b6:bf:29:c2:65:a7
         "#,
         );
 
-        assert_eq!(records.len(), 7);
+        assert_eq!(records.len(), 10);
 
         assert!(records.contains(
             &fqdn("mandelbrot.home.local"),
@@ -174,6 +186,26 @@ bad line
         assert!(records.contains_reverse(
             Ipv4Addr::from_str("10.10.15.230").unwrap(),
             &fqdn("mandelbrot.home.local.")
+        ));
+
+        assert!(records.contains(
+            &fqdn("shashlik.home.local"),
+            &RData::Aaaa(Ipv6Addr::from_str("2b02:c7a:7e12:5b00:1::7a36").unwrap())
+        ));
+
+        assert!(records.contains(
+            &fqdn("caldigit.home.local"),
+            &RData::Aaaa(Ipv6Addr::from_str("2b02:c7a:7e12:5b00:1::26b7").unwrap())
+        ));
+
+        assert!(records.contains(
+            &fqdn("tikka.home.local"),
+            &RData::Aaaa(Ipv6Addr::from_str("2a02:c7c:8e12:5b00:1::c8da").unwrap())
+        ));
+
+        assert!(records.contains_reverse(
+            Ipv6Addr::from_str("2b02:c7a:7e12:5b00:1::7a36").unwrap(),
+            &fqdn("shashlik.home.local.")
         ));
     }
 

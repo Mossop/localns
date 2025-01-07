@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    net::Ipv4Addr,
+    net::{Ipv4Addr, Ipv6Addr},
     path::Path,
     str::FromStr,
 };
@@ -63,7 +63,8 @@ impl TryFrom<models::Network> for Network {
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct ContainerEndpoint {
     network: Network,
-    ip: Option<Ipv4Addr>,
+    ipv4: Option<Ipv4Addr>,
+    ipv6: Option<Ipv6Addr>,
 }
 
 impl ContainerEndpoint {
@@ -76,7 +77,10 @@ impl ContainerEndpoint {
 
         Ok(ContainerEndpoint {
             network: network.clone(),
-            ip: state.ip_address.and_then(|s| Ipv4Addr::from_str(&s).ok()),
+            ipv4: state.ip_address.and_then(|s| Ipv4Addr::from_str(&s).ok()),
+            ipv6: state
+                .global_ipv6_address
+                .and_then(|s| Ipv6Addr::from_str(&s).ok()),
         })
     }
 }
@@ -252,8 +256,13 @@ fn generate_records(source_id: &SourceId, state: DockerState) -> RecordSet {
 
                 for endpoint in container.networks.values() {
                     if &endpoint.network.name == network {
-                        if let Some(ip) = endpoint.ip {
+                        if let Some(ip) = endpoint.ipv4 {
                             records.insert(Record::new(fqdn.clone(), RData::A(ip)));
+                            seen = true;
+                        }
+
+                        if let Some(ip) = endpoint.ipv6 {
+                            records.insert(Record::new(fqdn.clone(), RData::Aaaa(ip)));
                             seen = true;
                         }
                     }
@@ -266,28 +275,23 @@ fn generate_records(source_id: &SourceId, state: DockerState) -> RecordSet {
                     )
                 }
             } else {
-                let possible_ips: Vec<Ipv4Addr> = container
-                    .networks
-                    .values()
-                    .filter_map(|endpoint| {
-                        if networks.contains(&endpoint.network.id) {
-                            endpoint.ip
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
+                let mut seen_ip = false;
 
-                if let Some(ip) = possible_ips.first() {
-                    if possible_ips.len() > 1 {
-                        tracing::warn!(
-                            hostname,
-                            "Cannot add record as it is present on multiple possible networks.",
-                        );
-                    } else {
-                        records.insert(Record::new(fqdn.clone(), RData::A(*ip)));
+                for endpoint in container.networks.values() {
+                    if networks.contains(&endpoint.network.id) {
+                        if let Some(ipv4) = endpoint.ipv4 {
+                            seen_ip = true;
+                            records.insert(Record::new(fqdn.clone(), RData::A(ipv4)));
+                        }
+
+                        if let Some(ipv6) = endpoint.ipv6 {
+                            seen_ip = true;
+                            records.insert(Record::new(fqdn.clone(), RData::Aaaa(ipv6)));
+                        }
                     }
-                } else {
+                }
+
+                if !seen_ip {
                     tracing::warn!(
                         hostname,
                         "Cannot add record as none of its networks appeared usable.",

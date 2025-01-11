@@ -10,7 +10,7 @@ use crate::{
     api::ApiRecords,
     config::deserialize_url,
     run_loop::{Backoff, LoopResult},
-    sources::{SourceConfig, SourceId, SourceType, SpawnHandle},
+    sources::{SourceConfig, SourceHandle, SourceId, SourceType},
     Error, RecordServer,
 };
 
@@ -133,8 +133,6 @@ async fn remote_loop<S: RecordServer>(
 }
 
 impl SourceConfig for RemoteConfig {
-    type Handle = SpawnHandle;
-
     fn source_type() -> SourceType {
         SourceType::Remote
     }
@@ -144,7 +142,7 @@ impl SourceConfig for RemoteConfig {
         self,
         source_id: SourceId,
         server: &S,
-    ) -> Result<SpawnHandle, Error> {
+    ) -> Result<SourceHandle, Error> {
         tracing::trace!("Adding source");
 
         let handle = {
@@ -159,7 +157,7 @@ impl SourceConfig for RemoteConfig {
             ))
         };
 
-        Ok(SpawnHandle { handle })
+        Ok(handle.into())
     }
 }
 
@@ -258,114 +256,114 @@ mod tests {
 
         let mut test_server = MultiSourceServer::new();
 
+        let source_id = SourceId {
+            server_id: Uuid::new_v4(),
+            source_type: RemoteConfig::source_type(),
+            source_name: "test".to_string(),
+        };
+
+        let config = RemoteConfig {
+            url: format!("http://localhost:{}/", api.port).parse().unwrap(),
+            interval_ms: Some(100),
+        };
+
+        let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
+
+        let records = test_server
+            .wait_for_records(|records| records.has_name(&name("www.test.local.")))
+            .await;
+
+        assert_eq!(records.len(), 2);
+
+        let records_1 = records.get(&remote_source_1).unwrap();
+        assert_eq!(records_1.len(), 1);
+        assert!(records_1.contains(
+            &fqdn("www.test.local"),
+            &RData::A("10.5.23.43".parse().unwrap())
+        ));
+
+        let records_2 = records.get(&remote_source_2).unwrap();
+        assert_eq!(records_2.len(), 1);
+        assert!(records_2.contains(
+            &fqdn("www.test.local"),
+            &RData::A("10.4.2.4".parse().unwrap())
+        ));
+
         {
-            let source_id = SourceId {
-                server_id: Uuid::new_v4(),
-                source_type: RemoteConfig::source_type(),
-                source_name: "test".to_string(),
-            };
-
-            let config = RemoteConfig {
-                url: format!("http://localhost:{}/", api.port).parse().unwrap(),
-                interval_ms: Some(100),
-            };
-
-            let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
-
-            let records = test_server
-                .wait_for_records(|records| records.has_name(&name("www.test.local.")))
-                .await;
-
-            assert_eq!(records.len(), 2);
-
-            let records_1 = records.get(&remote_source_1).unwrap();
-            assert_eq!(records_1.len(), 1);
-            assert!(records_1.contains(
-                &fqdn("www.test.local"),
-                &RData::A("10.5.23.43".parse().unwrap())
-            ));
-
-            let records_2 = records.get(&remote_source_2).unwrap();
-            assert_eq!(records_2.len(), 1);
-            assert!(records_2.contains(
-                &fqdn("www.test.local"),
-                &RData::A("10.4.2.4".parse().unwrap())
-            ));
-
-            {
-                let mut inner = server_inner.lock().await;
-                build_records(
-                    &mut inner,
-                    [(
-                        &remote_source_1,
-                        &[
-                            (
-                                fqdn("www.test.local"),
-                                RData::A("10.5.23.43".parse().unwrap()),
-                            ),
-                            (
-                                fqdn("bob.test.local"),
-                                RData::Aaaa("fe80::1".parse().unwrap()),
-                            ),
-                        ],
-                    )],
-                );
-            }
-
-            let records = test_server
-                .wait_for_records(|records| records.has_name(&name("bob.test.local.")))
-                .await;
-
-            assert_eq!(records.len(), 1);
-
-            let records_1 = records.get(&remote_source_1).unwrap();
-            assert_eq!(records_1.len(), 2);
-            assert!(records_1.contains(
-                &fqdn("www.test.local"),
-                &RData::A("10.5.23.43".parse().unwrap())
-            ));
-            assert!(records_1.contains(
-                &fqdn("bob.test.local"),
-                &RData::Aaaa("fe80::1".parse().unwrap())
-            ));
-
-            {
-                let mut inner = server_inner.lock().await;
-                build_records(
-                    &mut inner,
-                    [(
-                        &remote_source_1,
-                        &[
-                            (
-                                fqdn("www.test.local"),
-                                RData::A("10.10.2.41".parse().unwrap()),
-                            ),
-                            (
-                                fqdn("done.test.local"),
-                                RData::A("10.1.2.41".parse().unwrap()),
-                            ),
-                        ],
-                    )],
-                );
-            }
-
-            let records = test_server
-                .wait_for_records(|records| records.has_name(&name("done.test.local.")))
-                .await;
-
-            assert_eq!(records.len(), 1);
-
-            let records_1 = records.get(&remote_source_1).unwrap();
-            assert_eq!(records_1.len(), 2);
-            assert!(records_1.contains(
-                &fqdn("www.test.local"),
-                &RData::A("10.10.2.41".parse().unwrap())
-            ));
-            assert!(records_1.contains(
-                &fqdn("done.test.local"),
-                &RData::A("10.1.2.41".parse().unwrap())
-            ));
+            let mut inner = server_inner.lock().await;
+            build_records(
+                &mut inner,
+                [(
+                    &remote_source_1,
+                    &[
+                        (
+                            fqdn("www.test.local"),
+                            RData::A("10.5.23.43".parse().unwrap()),
+                        ),
+                        (
+                            fqdn("bob.test.local"),
+                            RData::Aaaa("fe80::1".parse().unwrap()),
+                        ),
+                    ],
+                )],
+            );
         }
+
+        let records = test_server
+            .wait_for_records(|records| records.has_name(&name("bob.test.local.")))
+            .await;
+
+        assert_eq!(records.len(), 1);
+
+        let records_1 = records.get(&remote_source_1).unwrap();
+        assert_eq!(records_1.len(), 2);
+        assert!(records_1.contains(
+            &fqdn("www.test.local"),
+            &RData::A("10.5.23.43".parse().unwrap())
+        ));
+        assert!(records_1.contains(
+            &fqdn("bob.test.local"),
+            &RData::Aaaa("fe80::1".parse().unwrap())
+        ));
+
+        {
+            let mut inner = server_inner.lock().await;
+            build_records(
+                &mut inner,
+                [(
+                    &remote_source_1,
+                    &[
+                        (
+                            fqdn("www.test.local"),
+                            RData::A("10.10.2.41".parse().unwrap()),
+                        ),
+                        (
+                            fqdn("done.test.local"),
+                            RData::A("10.1.2.41".parse().unwrap()),
+                        ),
+                    ],
+                )],
+            );
+        }
+
+        let records = test_server
+            .wait_for_records(|records| records.has_name(&name("done.test.local.")))
+            .await;
+
+        assert_eq!(records.len(), 1);
+
+        let records_1 = records.get(&remote_source_1).unwrap();
+        assert_eq!(records_1.len(), 2);
+        assert!(records_1.contains(
+            &fqdn("www.test.local"),
+            &RData::A("10.10.2.41".parse().unwrap())
+        ));
+        assert!(records_1.contains(
+            &fqdn("done.test.local"),
+            &RData::A("10.1.2.41".parse().unwrap())
+        ));
+
+        handle.drop().await;
 
         let records = test_server
             .wait_for_records(|records| !records.has_name(&name("done.test.local.")))

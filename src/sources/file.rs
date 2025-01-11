@@ -12,7 +12,7 @@ use tracing::instrument;
 
 use crate::{
     dns::{Fqdn, RData, Record, RecordSet},
-    sources::{SourceConfig, SourceId, SourceType, WatcherHandle},
+    sources::{SourceConfig, SourceHandle, SourceId, SourceType},
     watcher::{watch, FileEvent, WatchListener},
     Error, RecordServer, SourceRecords,
 };
@@ -110,8 +110,6 @@ impl<S: RecordServer> WatchListener for SourceWatcher<S> {
 }
 
 impl SourceConfig for FileConfig {
-    type Handle = WatcherHandle;
-
     fn source_type() -> SourceType {
         SourceType::File
     }
@@ -121,7 +119,7 @@ impl SourceConfig for FileConfig {
         self,
         source_id: SourceId,
         server: &S,
-    ) -> Result<WatcherHandle, Error> {
+    ) -> Result<SourceHandle, Error> {
         tracing::trace!("Adding source");
         let zone_file = self.relative();
 
@@ -146,7 +144,7 @@ impl SourceConfig for FileConfig {
             },
         )?;
 
-        Ok(WatcherHandle { _watcher: watcher })
+        Ok(watcher.into())
     }
 }
 
@@ -195,7 +193,7 @@ other.home.local: www.home.local
 
         let mut test_server = SingleSourceServer::new(&source_id);
 
-        let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
+        let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
         let records = test_server
             .wait_for_records(|records| records.has_name(&name("www.home.local.")))
@@ -243,5 +241,7 @@ www.home.local: 10.14.23.123
 
         let records = test_server.wait_for_maybe_records(|o| o.is_none()).await;
         assert_eq!(records, None);
+
+        handle.drop().await;
     }
 }

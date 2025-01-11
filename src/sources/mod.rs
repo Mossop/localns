@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
+    mem::forget,
 };
 
 use chrono::{DateTime, Utc};
@@ -18,40 +19,51 @@ mod remote;
 mod traefik;
 
 trait SourceConfig: PartialEq {
-    type Handle: SourceHandle;
-
     fn source_type() -> SourceType;
 
     async fn spawn<S: RecordServer>(
         self,
         source_id: SourceId,
         server: &S,
-    ) -> Result<Self::Handle, Error>;
+    ) -> Result<SourceHandle, Error>;
 }
 
-pub(crate) trait SourceHandle
-where
-    Self: Send + 'static,
-{
+#[derive(Default)]
+enum SourceHandle {
+    #[default]
+    None,
+    Spawned(JoinHandle<()>),
+    #[allow(dead_code)]
+    Watcher(Watcher),
 }
 
-struct SpawnHandle {
-    handle: JoinHandle<()>,
-}
-
-impl Drop for SpawnHandle {
-    fn drop(&mut self) {
-        self.handle.abort();
+impl From<JoinHandle<()>> for SourceHandle {
+    fn from(handle: JoinHandle<()>) -> Self {
+        SourceHandle::Spawned(handle)
     }
 }
 
-impl SourceHandle for SpawnHandle {}
-
-struct WatcherHandle {
-    _watcher: Watcher,
+impl From<Watcher> for SourceHandle {
+    fn from(watcher: Watcher) -> Self {
+        SourceHandle::Watcher(watcher)
+    }
 }
 
-impl SourceHandle for WatcherHandle {}
+impl SourceHandle {
+    async fn drop(self) {
+        if let Self::Spawned(handle) = &self {
+            handle.abort();
+        }
+
+        forget(self);
+    }
+}
+
+impl Drop for SourceHandle {
+    fn drop(&mut self) {
+        assert!(matches!(self, SourceHandle::None));
+    }
+}
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename = "lowercase")]
@@ -134,7 +146,7 @@ pub(crate) struct SourcesConfig {
 
 pub(crate) struct Sources {
     server_id: ServerId,
-    sources: HashMap<SourceId, Box<dyn SourceHandle>>,
+    sources: HashMap<SourceId, SourceHandle>,
 }
 
 impl Sources {
@@ -171,7 +183,7 @@ impl Sources {
 
                 match source_config.spawn(source_id.clone(), server).await {
                     Ok(handle) => {
-                        self.sources.insert(source_id, Box::new(handle));
+                        self.sources.insert(source_id, handle);
                     }
                     Err(e) => {
                         tracing::error!(source = %source_id, error = %e, "Failed adding source")
@@ -238,14 +250,18 @@ impl Sources {
 
         let all = self.sources.keys().cloned().collect::<HashSet<SourceId>>();
         for old in all.difference(&seen_sources) {
-            self.sources.remove(old);
+            if let Some(handle) = self.sources.remove(old) {
+                handle.drop().await;
+            }
         }
 
         server.prune_sources(&seen_sources).await;
     }
 
     pub(crate) async fn shutdown(&mut self) {
-        self.sources.clear();
+        for (_, source_handle) in self.sources.drain() {
+            source_handle.drop().await;
+        }
     }
 }
 

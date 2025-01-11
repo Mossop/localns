@@ -16,7 +16,7 @@ use tracing::instrument;
 use crate::{
     dns::{Fqdn, RData, Record, RecordSet},
     run_loop::{LoopResult, RunLoop},
-    sources::{SourceConfig, SourceId, SourceType, SpawnHandle},
+    sources::{SourceConfig, SourceHandle, SourceId, SourceType},
     util::Address,
     Error, RecordServer, SourceRecords,
 };
@@ -375,8 +375,6 @@ async fn docker_loop<S: RecordServer>(
 }
 
 impl SourceConfig for DockerConfig {
-    type Handle = SpawnHandle;
-
     fn source_type() -> SourceType {
         SourceType::Docker
     }
@@ -386,7 +384,7 @@ impl SourceConfig for DockerConfig {
         self,
         source_id: SourceId,
         server: &S,
-    ) -> Result<SpawnHandle, Error> {
+    ) -> Result<SourceHandle, Error> {
         tracing::trace!("Adding source");
 
         let handle = {
@@ -400,7 +398,7 @@ impl SourceConfig for DockerConfig {
             )
         };
 
-        Ok(SpawnHandle { handle })
+        Ok(handle.into())
     }
 }
 
@@ -436,7 +434,7 @@ mod tests {
 
         let mut test_server = SingleSourceServer::new(&source_id);
 
-        let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
+        let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
         let records = test_server
             .wait_for_records(|records| records.has_name(&name("test1.home.local.")))
@@ -481,5 +479,7 @@ mod tests {
                 assert!(records.contains(&fqdn("test1.home.local"), &RData::Aaaa(ip)));
             }
         }
+
+        handle.drop().await;
     }
 }

@@ -7,7 +7,7 @@ use crate::{
     config::deserialize_url,
     dns::{Fqdn, RData, Record, RecordSet},
     run_loop::{LoopResult, RunLoop},
-    sources::{SourceConfig, SourceId, SourceType, SpawnHandle},
+    sources::{SourceConfig, SourceHandle, SourceId, SourceType},
     Error, RecordServer, SourceRecords,
 };
 
@@ -231,8 +231,6 @@ async fn traefik_loop<S: RecordServer>(
 }
 
 impl SourceConfig for TraefikConfig {
-    type Handle = SpawnHandle;
-
     fn source_type() -> SourceType {
         SourceType::Traefik
     }
@@ -242,7 +240,7 @@ impl SourceConfig for TraefikConfig {
         self,
         source_id: SourceId,
         server: &S,
-    ) -> Result<SpawnHandle, Error> {
+    ) -> Result<SourceHandle, Error> {
         let handle = {
             let backoff = RunLoop::new(self.interval_ms.unwrap_or(POLL_INTERVAL_MS));
             let client = Client::new();
@@ -255,7 +253,7 @@ impl SourceConfig for TraefikConfig {
             )
         };
 
-        Ok(SpawnHandle { handle })
+        Ok(handle.into())
     }
 }
 
@@ -349,7 +347,7 @@ mod tests {
     #[tracing_test::traced_test]
     #[tokio::test]
     async fn integration() {
-        let (_handle, mut test_server) = {
+        let (handle, mut test_server) = {
             let traefik = traefik_container(
                 r#"http:
   routers:
@@ -383,7 +381,7 @@ mod tests {
 
             let mut test_server = SingleSourceServer::new(&source_id);
 
-            let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
+            let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
             let records = test_server
                 .wait_for_records(|records| records.has_name(&name("test.example.org.")))
@@ -392,6 +390,8 @@ mod tests {
             assert_eq!(records.len(), 1);
 
             assert!(records.contains(&fqdn("test.example.org"), &RData::Cname(fqdn("localhost"))));
+
+            handle.drop().await;
 
             let config = TraefikConfig {
                 url: format!("http://localhost:{port}/api/").parse().unwrap(),
@@ -425,5 +425,7 @@ mod tests {
         let records = test_server.wait_for_maybe_records(|o| o.is_none()).await;
 
         assert_eq!(records, None);
+
+        handle.drop().await;
     }
 }

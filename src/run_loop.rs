@@ -99,25 +99,23 @@ mod tests {
         assert_duration(&backoff, 200);
         backoff.reset();
         assert_duration(&backoff, 200);
-        backoff.reset();
+        backoff.backoff();
         assert_duration(&backoff, 500);
-        backoff.reset();
+        backoff.backoff();
         assert_duration(&backoff, 1250);
         backoff.reset();
         assert_duration(&backoff, 200);
-        backoff.reset();
+        backoff.backoff();
         assert_duration(&backoff, 500);
-        backoff.reset();
+        backoff.backoff();
         assert_duration(&backoff, 1250);
-        backoff.reset();
+        backoff.backoff();
         assert_duration(&backoff, 2000);
-        backoff.reset();
         assert_duration(&backoff, 2000);
-        backoff.reset();
         assert_duration(&backoff, 2000);
         backoff.reset();
         assert_duration(&backoff, 200);
-        backoff.reset();
+        backoff.backoff();
         assert_duration(&backoff, 500);
     }
 }

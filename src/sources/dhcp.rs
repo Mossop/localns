@@ -7,7 +7,7 @@ use tracing::instrument;
 
 use crate::{
     dns::{Fqdn, RData, Record, RecordSet},
-    sources::{SourceConfig, SourceId, SourceType, WatcherHandle},
+    sources::{SourceConfig, SourceHandle, SourceId, SourceType},
     watcher::{watch, FileEvent, WatchListener},
     Error, RecordServer, SourceRecords,
 };
@@ -89,8 +89,6 @@ impl<S: RecordServer> WatchListener for SourceWatcher<S> {
 }
 
 impl SourceConfig for DhcpConfig {
-    type Handle = WatcherHandle;
-
     fn source_type() -> SourceType {
         SourceType::Dhcp
     }
@@ -100,7 +98,7 @@ impl SourceConfig for DhcpConfig {
         self,
         source_id: SourceId,
         server: &S,
-    ) -> Result<WatcherHandle, Error> {
+    ) -> Result<SourceHandle, Error> {
         tracing::trace!("Adding source");
         let lease_file = self.lease_file.relative();
 
@@ -122,7 +120,7 @@ impl SourceConfig for DhcpConfig {
             },
         )?;
 
-        Ok(WatcherHandle { _watcher: watcher })
+        Ok(watcher.into())
     }
 }
 
@@ -243,7 +241,7 @@ duid 00:01:00:01:2f:0e:bf:99:00:e2:69:3e:6c:0a
 
         let mut test_server = SingleSourceServer::new(&source_id);
 
-        let _handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
+        let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
         let records = test_server
             .wait_for_records(|records| records.has_name(&name("caldigit.home.local.")))
@@ -285,5 +283,7 @@ duid 00:01:00:01:2f:0e:bf:99:00:e2:69:3e:6c:0a
             &fqdn("other.home.local"),
             &RData::A(Ipv4Addr::from_str("10.10.1.58").unwrap())
         ));
+
+        handle.drop().await;
     }
 }

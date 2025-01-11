@@ -16,7 +16,7 @@ mod query;
 mod record;
 mod upstream;
 
-pub(crate) use record::{Fqdn, RData, Record, RecordSet, RecordSource};
+pub(crate) use record::{Fqdn, RData, Record, RecordSet};
 pub(crate) use upstream::Upstream;
 
 use self::handler::Handler;

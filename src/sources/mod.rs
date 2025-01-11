@@ -65,11 +65,12 @@ pub(crate) enum SourceType {
 
 derive_display_from_serialize!(SourceType);
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct SourceId {
-    server_id: ServerId,
-    source_type: SourceType,
-    source_name: String,
+    #[serde(with = "uuid::serde::braced")]
+    pub(crate) server_id: ServerId,
+    pub(crate) source_type: SourceType,
+    pub(crate) source_name: String,
 }
 
 impl SourceId {
@@ -92,7 +93,7 @@ impl fmt::Display for SourceId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct SourceRecords {
     pub(crate) source_id: SourceId,
     pub(crate) timestamp: DateTime<Utc>,
@@ -132,7 +133,7 @@ pub(crate) struct SourcesConfig {
 }
 
 pub(crate) struct Sources {
-    server_id: Uuid,
+    server_id: ServerId,
     sources: HashMap<SourceId, Box<dyn SourceHandle>>,
 }
 
@@ -142,6 +143,10 @@ impl Sources {
             server_id: Uuid::new_v4(),
             sources: HashMap::new(),
         }
+    }
+
+    pub(crate) fn server_id(&self) -> ServerId {
+        self.server_id
     }
 
     async fn add_sources<C, R>(

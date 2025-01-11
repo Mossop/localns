@@ -1,31 +1,73 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use actix_web::{dev, get, web, App, HttpServer, Responder};
-use serde::Deserialize;
-use tokio::sync::RwLock;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
-use crate::dns::{Record, RecordSet, RecordSource};
+use crate::{dns::Record, sources::SourceRecords, ServerId, ServerInner};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub(crate) struct ApiConfig {
     pub(crate) address: SocketAddr,
 }
 
-type AppData = Arc<RwLock<RecordSet>>;
+#[derive(Clone)]
+struct AppData {
+    server_id: ServerId,
+    server_inner: Arc<Mutex<ServerInner>>,
+}
 
 #[get("/records")]
-async fn records(server: web::Data<AppData>) -> impl Responder {
+async fn records(app_data: web::Data<AppData>) -> impl Responder {
     let records: Vec<Record> = {
-        server
-            .read()
+        app_data
+            .server_inner
+            .lock()
             .await
-            .records()
-            .filter(|r| r.source == RecordSource::Local)
-            .cloned()
+            .records
+            .values()
+            .filter_map(|source_records| {
+                if source_records.source_id.server_id == app_data.server_id {
+                    Some(source_records.records.clone())
+                } else {
+                    None
+                }
+            })
+            .flatten()
             .collect()
     };
 
     web::Json(records)
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct ApiRecords {
+    pub(crate) server_id: ServerId,
+    pub(crate) timestamp: DateTime<Utc>,
+    pub(crate) source_records: Vec<SourceRecords>,
+}
+
+#[get("/v2/records")]
+async fn v2_records(app_data: web::Data<AppData>) -> impl Responder {
+    let source_records = {
+        app_data
+            .server_inner
+            .lock()
+            .await
+            .records
+            .values()
+            .cloned()
+            .collect()
+    };
+
+    let api_records = ApiRecords {
+        server_id: app_data.server_id,
+        timestamp: Utc::now(),
+        source_records,
+    };
+
+    web::Json(api_records)
 }
 
 fn create_server(config: &ApiConfig, app_data: AppData) -> Option<(dev::Server, u16)> {
@@ -35,6 +77,7 @@ fn create_server(config: &ApiConfig, app_data: AppData) -> Option<(dev::Server, 
         App::new()
             .app_data(web::Data::new(app_data.clone()))
             .service(records)
+            .service(v2_records)
     })
     .disable_signals()
     .bind(config.address)
@@ -58,7 +101,16 @@ pub(crate) struct ApiServer {
 }
 
 impl ApiServer {
-    pub(crate) fn new(config: &ApiConfig, data: AppData) -> Option<Self> {
+    pub(crate) fn new(
+        config: &ApiConfig,
+        server_id: ServerId,
+        server_inner: Arc<Mutex<ServerInner>>,
+    ) -> Option<Self> {
+        let data = AppData {
+            server_id,
+            server_inner,
+        };
+
         create_server(config, data).map(|(api_server, _port)| {
             let handle = api_server.handle();
             tokio::spawn(api_server);

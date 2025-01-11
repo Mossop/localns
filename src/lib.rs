@@ -18,6 +18,7 @@ use std::{
 };
 
 pub use anyhow::Error;
+use chrono::{DateTime, Utc};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -81,13 +82,18 @@ where
 {
     fn add_source_records(&self, new_records: SourceRecords) -> impl Future<Output = ()> + Send;
 
-    fn clear_source_records(&self, source_id: &SourceId) -> impl Future<Output = ()> + Send;
+    fn clear_source_records(
+        &self,
+        source_id: &SourceId,
+        timestamp: DateTime<Utc>,
+    ) -> impl Future<Output = ()> + Send;
 
     async fn prune_sources(&self, keep: &HashSet<SourceId>);
 }
 
 #[derive(Clone)]
 pub struct Server {
+    server_id: ServerId,
     inner: Arc<Mutex<ServerInner>>,
     sources: Arc<Mutex<Sources>>,
     server_state: ServerState<Zones>,
@@ -117,14 +123,16 @@ impl Server {
         let config = Config::from_file(config_path)?;
 
         let server_state = ServerState::new(RecordSet::new(), config.zones.clone());
-        let records = server_state.records.clone();
+        let sources = Sources::new();
+        let server_id = sources.server_id();
 
         let server = Self {
+            server_id,
             inner: Arc::new(Mutex::new(ServerInner {
                 config: config.clone(),
                 records: HashMap::new(),
             })),
-            sources: Arc::new(Mutex::new(Sources::new())),
+            sources: Arc::new(Mutex::new(sources)),
             dns_server: Arc::new(Mutex::new(
                 DnsServer::new(&config.server, server_state.clone()).await,
             )),
@@ -136,7 +144,7 @@ impl Server {
         if let Some(api_server) = config
             .api
             .as_ref()
-            .and_then(|api_config| ApiServer::new(api_config, records))
+            .and_then(|api_config| ApiServer::new(api_config, server_id, server.inner.clone()))
         {
             server.api_server.replace(api_server).await;
         }
@@ -221,7 +229,7 @@ impl Server {
             }
 
             if let Some(api_server) = config.api.as_ref().and_then(|api_config| {
-                ApiServer::new(api_config, self.server_state.records.clone())
+                ApiServer::new(api_config, self.server_id, self.inner.clone())
             }) {
                 self.api_server.replace(api_server).await;
             }
@@ -231,42 +239,56 @@ impl Server {
 
 impl RecordServer for Server {
     async fn add_source_records(&self, new_records: SourceRecords) {
-        let mut inner = self.inner.lock().await;
+        let records = {
+            let mut changed = true;
+            let mut inner = self.inner.lock().await;
 
-        let mut changed = true;
-        inner
-            .records
-            .entry(new_records.source_id.clone())
-            .and_modify(|current| {
-                if new_records.timestamp < current.timestamp {
-                    changed = false;
-                    return;
-                }
+            inner
+                .records
+                .entry(new_records.source_id.clone())
+                .and_modify(|current| {
+                    if new_records.timestamp < current.timestamp {
+                        changed = false;
+                        return;
+                    }
 
-                current.timestamp = new_records.timestamp;
-                if new_records.records == current.records {
-                    changed = false;
-                    return;
-                }
+                    current.timestamp = new_records.timestamp;
+                    if new_records.records == current.records {
+                        changed = false;
+                        return;
+                    }
 
-                current.records = new_records.records.clone();
-            })
-            .or_insert(new_records);
+                    current.records = new_records.records.clone();
+                })
+                .or_insert(new_records);
 
-        if changed {
-            let records = inner.records();
-            self.server_state.replace_records(records).await;
-        }
+            if !changed {
+                return;
+            }
+
+            inner.records()
+        };
+
+        self.server_state.replace_records(records).await;
     }
 
-    async fn clear_source_records(&self, source_id: &SourceId) {
+    async fn clear_source_records(&self, source_id: &SourceId, timestamp: DateTime<Utc>) {
         let mut inner = self.inner.lock().await;
 
-        if let Some(old) = inner.records.remove(source_id) {
-            if !old.records.is_empty() {
-                let records = inner.records();
-                self.server_state.replace_records(records).await;
+        let must_update = if let Some(old) = inner.records.get(source_id) {
+            if old.timestamp > timestamp {
+                return;
             }
+
+            !old.records.is_empty()
+        } else {
+            return;
+        };
+
+        inner.records.remove(source_id);
+        if must_update {
+            let records = inner.records();
+            self.server_state.replace_records(records).await;
         }
     }
 
@@ -406,7 +428,7 @@ server:
             server_records.contains(&fqdn("other.data.com"), &RData::Cname(fqdn("www.data.com")))
         );
 
-        server.clear_source_records(&source_id_2).await;
+        server.clear_source_records(&source_id_2, Utc::now()).await;
 
         let server_records = server.records().await;
         assert!(server_records.is_empty());

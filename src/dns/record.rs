@@ -162,22 +162,9 @@ impl TryFrom<String> for Fqdn {
     }
 }
 
-#[derive(Debug, PartialEq, Hash, Eq, Clone)]
-pub(crate) enum RecordSource {
-    Local,
-    Remote,
-}
-
-fn remote_source() -> RecordSource {
-    RecordSource::Remote
-}
-
 #[derive(PartialEq, Hash, Eq, Clone, Deserialize, Serialize)]
 pub(crate) struct Record {
     name: Fqdn,
-    #[serde(skip)]
-    #[serde(default = "remote_source")]
-    pub(crate) source: RecordSource,
     pub(crate) ttl: Option<u32>,
     rdata: RData,
 }
@@ -190,11 +177,7 @@ impl fmt::Debug for Record {
             "no expiry".to_string()
         };
 
-        write!(
-            f,
-            "{} -> {:?} ({:?}, {})",
-            self.name, self.rdata, self.source, ttl
-        )
+        write!(f, "{} -> {:?} ({})", self.name, self.rdata, ttl)
     }
 }
 
@@ -209,7 +192,6 @@ impl Record {
         Self {
             name,
             rdata,
-            source: RecordSource::Local,
             ttl: None,
         }
     }

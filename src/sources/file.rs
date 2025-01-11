@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use chrono::Utc;
 use figment::value::magic::RelativePathBuf;
 use hickory_server::proto::error::ProtoError;
 use serde::Deserialize;
@@ -100,7 +101,9 @@ impl<S: RecordServer> WatchListener for SourceWatcher<S> {
             }
             Err(e) => {
                 tracing::warn!(error=%e, "Failed to read zone file");
-                self.server.clear_source_records(&self.source_id).await;
+                self.server
+                    .clear_source_records(&self.source_id, Utc::now())
+                    .await;
             }
         }
     }
@@ -130,7 +133,7 @@ impl SourceConfig for FileConfig {
             }
             Err(e) => {
                 tracing::warn!(error=%e, "Failed to read zone file");
-                server.clear_source_records(&source_id).await;
+                server.clear_source_records(&source_id, Utc::now()).await;
             }
         }
 

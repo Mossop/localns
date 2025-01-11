@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use chrono::{DateTime, Utc};
 use hickory_server::proto::rr::{domain::Name, rdata, RData};
 use reqwest::header::HeaderValue;
 use tempfile::{tempdir, TempDir};
@@ -147,9 +148,9 @@ impl RecordServer for SingleSourceServer {
         self.inner.add_source_records(new_records).await;
     }
 
-    async fn clear_source_records(&self, source_id: &SourceId) {
+    async fn clear_source_records(&self, source_id: &SourceId, timestamp: DateTime<Utc>) {
         assert_eq!(source_id, &self.source_id);
-        self.inner.clear_source_records(source_id).await;
+        self.inner.clear_source_records(source_id, timestamp).await;
     }
 
     async fn prune_sources(&self, keep: &HashSet<SourceId>) {
@@ -164,7 +165,7 @@ impl RecordServer for MultiSourceServer {
         self.sender.send(records.clone()).unwrap();
     }
 
-    async fn clear_source_records(&self, source_id: &SourceId) {
+    async fn clear_source_records(&self, source_id: &SourceId, _timestamp: DateTime<Utc>) {
         let mut records = self.records.lock().await;
         records.remove(source_id);
         self.sender.send(records.clone()).unwrap();

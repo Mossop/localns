@@ -25,41 +25,50 @@ trait SourceConfig: PartialEq {
         self,
         source_id: SourceId,
         server: &S,
-    ) -> Result<SourceHandle, Error>;
+    ) -> Result<SourceHandle<S>, Error>;
 }
 
 #[derive(Default)]
-enum SourceHandle {
+enum SourceHandle<S: RecordServer> {
     #[default]
     None,
     Spawned(JoinHandle<()>),
     #[allow(dead_code)]
     Watcher(Watcher),
+    Remote(remote::RemoteRecords<S>),
 }
 
-impl From<JoinHandle<()>> for SourceHandle {
+impl<S: RecordServer> From<remote::RemoteRecords<S>> for SourceHandle<S> {
+    fn from(handle: remote::RemoteRecords<S>) -> Self {
+        SourceHandle::Remote(handle)
+    }
+}
+
+impl<S: RecordServer> From<JoinHandle<()>> for SourceHandle<S> {
     fn from(handle: JoinHandle<()>) -> Self {
         SourceHandle::Spawned(handle)
     }
 }
 
-impl From<Watcher> for SourceHandle {
+impl<S: RecordServer> From<Watcher> for SourceHandle<S> {
     fn from(watcher: Watcher) -> Self {
         SourceHandle::Watcher(watcher)
     }
 }
 
-impl SourceHandle {
-    async fn drop(self) {
-        if let Self::Spawned(handle) = &self {
-            handle.abort();
+impl<S: RecordServer> SourceHandle<S> {
+    async fn drop(mut self) {
+        match &mut self {
+            Self::Spawned(handle) => handle.abort(),
+            Self::Remote(records) => records.drop().await,
+            _ => {}
         }
 
         forget(self);
     }
 }
 
-impl Drop for SourceHandle {
+impl<S: RecordServer> Drop for SourceHandle<S> {
     fn drop(&mut self) {
         assert!(matches!(self, SourceHandle::None));
     }
@@ -144,12 +153,12 @@ pub(crate) struct SourcesConfig {
     pub remote: HashMap<String, remote::RemoteConfig>,
 }
 
-pub(crate) struct Sources {
+pub(crate) struct Sources<S: RecordServer> {
     server_id: ServerId,
-    sources: HashMap<SourceId, SourceHandle>,
+    sources: HashMap<SourceId, SourceHandle<S>>,
 }
 
-impl Sources {
+impl<S: RecordServer> Sources<S> {
     pub(crate) fn new() -> Self {
         Self {
             server_id: Uuid::new_v4(),
@@ -161,15 +170,14 @@ impl Sources {
         self.server_id
     }
 
-    async fn add_sources<C, R>(
+    async fn add_sources<C>(
         &mut self,
         sources: HashMap<String, C>,
         old_sources: Option<&HashMap<String, C>>,
-        server: &R,
+        server: &S,
         seen_sources: &mut HashSet<SourceId>,
     ) where
         C: SourceConfig,
-        R: RecordServer,
     {
         for (name, source_config) in sources {
             tracing::debug!(name, source_type=%C::source_type(), "Adding source");
@@ -193,14 +201,12 @@ impl Sources {
         }
     }
 
-    pub(crate) async fn install_sources<R>(
+    pub(crate) async fn install_sources(
         &mut self,
-        server: &R,
+        server: &S,
         config: Config,
         old_config: Option<&Config>,
-    ) where
-        R: RecordServer,
-    {
+    ) {
         let mut seen_sources: HashSet<SourceId> = HashSet::new();
 
         // DHCP is assumed to not need any additional resolution.

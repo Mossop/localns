@@ -23,6 +23,7 @@ use tokio::{
     sync::{watch, Mutex},
     time,
 };
+use tracing::trace;
 
 use crate::{
     dns::{Fqdn, RecordSet},
@@ -66,7 +67,7 @@ impl MultiSourceServer {
         self.receiver.borrow_and_update().clone()
     }
 
-    async fn wait_for_state<F>(&mut self, mut cb: F) -> HashMap<SourceId, RecordSet>
+    pub(crate) async fn wait_for_state<F>(&mut self, mut cb: F) -> HashMap<SourceId, RecordSet>
     where
         F: FnMut(&HashMap<SourceId, RecordSet>) -> bool,
     {
@@ -80,7 +81,7 @@ impl MultiSourceServer {
         loop {
             let records = self.wait_for_change().await;
             if cb(&records) {
-                return records.clone();
+                return records;
             }
         }
     }
@@ -160,12 +161,24 @@ impl RecordServer for SingleSourceServer {
 
 impl RecordServer for MultiSourceServer {
     async fn add_source_records(&self, new_records: SourceRecords) {
+        trace!(
+            source = %new_records.source_id,
+            timestamp = %new_records.timestamp,
+            "Adding source records"
+        );
+
         let mut records = self.records.lock().await;
         records.insert(new_records.source_id, new_records.records);
         self.sender.send(records.clone()).unwrap();
     }
 
-    async fn clear_source_records(&self, source_id: &SourceId, _timestamp: DateTime<Utc>) {
+    async fn clear_source_records(&self, source_id: &SourceId, timestamp: DateTime<Utc>) {
+        trace!(
+            source = %source_id,
+            timestamp = %timestamp,
+            "Clearing source records"
+        );
+
         let mut records = self.records.lock().await;
         records.remove(source_id);
         self.sender.send(records.clone()).unwrap();

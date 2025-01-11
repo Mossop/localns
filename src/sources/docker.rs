@@ -384,7 +384,7 @@ impl SourceConfig for DockerConfig {
         self,
         source_id: SourceId,
         server: &S,
-    ) -> Result<SourceHandle, Error> {
+    ) -> Result<SourceHandle<S>, Error> {
         tracing::trace!("Adding source");
 
         let handle = {

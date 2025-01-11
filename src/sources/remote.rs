@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use chrono::{DateTime, Utc};
 use reqwest::{Client, Url};
 use serde::{de::DeserializeOwned, Deserialize};
-use tokio::time::sleep;
+use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
 use tracing::instrument;
 
 use crate::{
@@ -59,6 +59,7 @@ async fn remote_loop<S: RecordServer>(
     source_id: SourceId,
     remote_config: RemoteConfig,
     client: Client,
+    seen_sources: Arc<Mutex<HashMap<SourceId, DateTime<Utc>>>>,
 ) {
     let mut backoff = Backoff::new(remote_config.interval_ms.unwrap_or(POLL_INTERVAL_MS));
 
@@ -68,7 +69,7 @@ async fn remote_loop<S: RecordServer>(
         "Attempting to connect to remote server",
     );
 
-    let mut seen_sources: HashMap<SourceId, DateTime<Utc>> = HashMap::new();
+    let mut previous_sources: HashMap<SourceId, DateTime<Utc>> = HashMap::new();
 
     loop {
         let api_records =
@@ -80,9 +81,11 @@ async fn remote_loop<S: RecordServer>(
                     r
                 }
                 Err(e) => {
-                    for (source_id, timestamp) in seen_sources.iter() {
-                        server.clear_source_records(source_id, *timestamp).await;
+                    for (source_id, timestamp) in previous_sources.drain() {
+                        server.clear_source_records(&source_id, timestamp).await;
                     }
+
+                    seen_sources.lock().await.clear();
 
                     match e {
                         LoopResult::Quit => {
@@ -90,28 +93,27 @@ async fn remote_loop<S: RecordServer>(
                         }
                         LoopResult::Sleep => {
                             backoff.reset();
-                            sleep(backoff.duration()).await;
-                            continue;
                         }
                         LoopResult::Backoff => {
                             backoff.backoff();
-                            sleep(backoff.duration()).await;
-                            continue;
                         }
                     }
+
+                    sleep(backoff.duration()).await;
+                    continue;
                 }
             };
 
         let mut record_count = 0;
-        let old_sources = seen_sources;
-        seen_sources = api_records
+        let old_sources = previous_sources;
+        previous_sources = api_records
             .source_records
             .iter()
             .map(|sr| (sr.source_id.clone(), sr.timestamp))
             .collect();
 
         for (old_source, timestamp) in old_sources {
-            if !seen_sources.contains_key(&old_source) {
+            if !previous_sources.contains_key(&old_source) {
                 server.clear_source_records(&old_source, timestamp).await;
             }
         }
@@ -122,6 +124,8 @@ async fn remote_loop<S: RecordServer>(
             server.add_source_records(source_records).await;
         }
 
+        seen_sources.lock().await.clone_from(&previous_sources);
+
         tracing::trace!(
             %source_id,
             record_count,
@@ -129,6 +133,26 @@ async fn remote_loop<S: RecordServer>(
         );
 
         sleep(backoff.duration()).await;
+    }
+}
+
+pub(super) struct RemoteRecords<S: RecordServer> {
+    server: S,
+    handle: JoinHandle<()>,
+    seen_sources: Arc<Mutex<HashMap<SourceId, DateTime<Utc>>>>,
+}
+
+impl<S: RecordServer> RemoteRecords<S> {
+    pub(super) async fn drop(&self) {
+        self.handle.abort();
+
+        let mut sources = self.seen_sources.lock().await;
+
+        for (source_id, timestamp) in sources.drain() {
+            self.server
+                .clear_source_records(&source_id, timestamp)
+                .await;
+        }
     }
 }
 
@@ -142,8 +166,10 @@ impl SourceConfig for RemoteConfig {
         self,
         source_id: SourceId,
         server: &S,
-    ) -> Result<SourceHandle, Error> {
+    ) -> Result<SourceHandle<S>, Error> {
         tracing::trace!("Adding source");
+
+        let seen_sources = Arc::new(Mutex::new(HashMap::new()));
 
         let handle = {
             let client = Client::new();
@@ -154,10 +180,16 @@ impl SourceConfig for RemoteConfig {
                 source_id,
                 config.clone(),
                 client.clone(),
+                seen_sources.clone(),
             ))
         };
 
-        Ok(handle.into())
+        Ok(RemoteRecords {
+            server: server.clone(),
+            handle,
+            seen_sources,
+        }
+        .into())
     }
 }
 
@@ -232,17 +264,23 @@ mod tests {
             [
                 (
                     &remote_source_1,
-                    &[(
-                        fqdn("www.test.local"),
-                        RData::A("10.5.23.43".parse().unwrap()),
-                    )],
+                    &[
+                        (
+                            fqdn("www.test.local"),
+                            RData::A("10.5.23.43".parse().unwrap()),
+                        ),
+                        (fqdn("1.test.local"), RData::A("10.9.34.5".parse().unwrap())),
+                    ],
                 ),
                 (
                     &remote_source_2,
-                    &[(
-                        fqdn("www.test.local"),
-                        RData::A("10.4.2.4".parse().unwrap()),
-                    )],
+                    &[
+                        (
+                            fqdn("www.test.local"),
+                            RData::A("10.4.2.4".parse().unwrap()),
+                        ),
+                        (fqdn("2.test.local"), RData::A("10.8.12.4".parse().unwrap())),
+                    ],
                 ),
             ],
         );
@@ -269,21 +307,25 @@ mod tests {
 
         let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
+        test_server
+            .wait_for_records(|records| records.has_name(&name("1.test.local.")))
+            .await;
+
         let records = test_server
-            .wait_for_records(|records| records.has_name(&name("www.test.local.")))
+            .wait_for_records(|records| records.has_name(&name("2.test.local.")))
             .await;
 
         assert_eq!(records.len(), 2);
 
         let records_1 = records.get(&remote_source_1).unwrap();
-        assert_eq!(records_1.len(), 1);
+        assert_eq!(records_1.len(), 2);
         assert!(records_1.contains(
             &fqdn("www.test.local"),
             &RData::A("10.5.23.43".parse().unwrap())
         ));
 
         let records_2 = records.get(&remote_source_2).unwrap();
-        assert_eq!(records_2.len(), 1);
+        assert_eq!(records_2.len(), 2);
         assert!(records_2.contains(
             &fqdn("www.test.local"),
             &RData::A("10.4.2.4".parse().unwrap())
@@ -366,7 +408,7 @@ mod tests {
         handle.drop().await;
 
         let records = test_server
-            .wait_for_records(|records| !records.has_name(&name("done.test.local.")))
+            .wait_for_state(|source_records| source_records.is_empty())
             .await;
 
         assert!(records.is_empty());

@@ -240,7 +240,7 @@ impl SourceConfig for TraefikConfig {
         self,
         source_id: SourceId,
         server: &S,
-    ) -> Result<SourceHandle, Error> {
+    ) -> Result<SourceHandle<S>, Error> {
         let handle = {
             let backoff = RunLoop::new(self.interval_ms.unwrap_or(POLL_INTERVAL_MS));
             let client = Client::new();

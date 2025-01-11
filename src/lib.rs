@@ -95,7 +95,7 @@ where
 pub struct Server {
     server_id: ServerId,
     inner: Arc<Mutex<ServerInner>>,
-    sources: Arc<Mutex<Sources>>,
+    sources: Arc<Mutex<Sources<Server>>>,
     server_state: ServerState<Zones>,
     dns_server: Arc<Mutex<DnsServer>>,
     config_watcher: LockedOption<Watcher>,

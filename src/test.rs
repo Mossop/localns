@@ -455,7 +455,7 @@ mod integration {
 
         let test_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test_resources")
-            .join("test1");
+            .join("coredns_compare");
 
         write_file(
             &config_file,

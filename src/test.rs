@@ -4,8 +4,7 @@ use std::{
     net::Ipv4Addr,
     path::Path,
     str::FromStr,
-    sync::Arc,
-    sync::Mutex as SyncMutex,
+    sync::{Arc, Mutex as SyncMutex},
     time::Duration,
 };
 

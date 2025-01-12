@@ -14,8 +14,7 @@ use std::{
     future::Future,
     mem,
     path::{Path, PathBuf},
-    sync::Arc,
-    sync::Mutex as SyncMutex,
+    sync::{Arc, Mutex as SyncMutex},
 };
 
 pub use anyhow::Error;

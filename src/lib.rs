@@ -20,6 +20,7 @@ use std::{
 
 pub use anyhow::Error;
 use chrono::{DateTime, Utc};
+use reqwest::Client;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -83,6 +84,8 @@ where
 {
     type UpdateGuard: Send;
 
+    fn http_client(&self) -> Client;
+
     fn start_batch_update(&self) -> impl Future<Output = Self::UpdateGuard> + Send;
 
     fn add_source_records(&self, new_records: SourceRecords) -> impl Future<Output = ()> + Send;
@@ -128,6 +131,7 @@ pub struct Server {
     dns_server: Arc<Mutex<DnsServer>>,
     config_watcher: LockedOption<Watcher>,
     api_server: LockedOption<ApiServer>,
+    http_client: Client,
 }
 
 struct ConfigWatcher {
@@ -151,10 +155,16 @@ impl Server {
         let config = Config::from_file(config_path)?;
 
         let server_state = ServerState::new(RecordSet::new(), config.zones.clone());
+
+        let http_client = Client::builder()
+            .dns_resolver(Arc::new(server_state.clone()))
+            .build()?;
+
         let sources = Sources::new();
         let server_id = sources.server_id();
 
         let server = Self {
+            http_client,
             batch_count: Default::default(),
             server_id,
             inner: Arc::new(Mutex::new(ServerInner {
@@ -268,6 +278,10 @@ impl Server {
 
 impl RecordServer for Server {
     type UpdateGuard = BatchGuard;
+
+    fn http_client(&self) -> Client {
+        self.http_client.clone()
+    }
 
     async fn start_batch_update(&self) -> Self::UpdateGuard {
         let _guard = self.inner.lock().await;

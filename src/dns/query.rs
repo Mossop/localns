@@ -1,8 +1,8 @@
-use std::{collections::HashSet, iter::once};
+use std::{collections::HashSet, iter::once, net::SocketAddr};
 
 use hickory_server::proto::{
     op::{Header, Query, ResponseCode},
-    rr::{self, DNSClass, Name, RecordType},
+    rr::{self, DNSClass, Name, RData, RecordType},
 };
 
 pub(super) struct QueryState {
@@ -44,6 +44,29 @@ impl QueryState {
             name_servers: Vec::new(),
             soa: None,
         }
+    }
+
+    pub(super) fn resolve_name(&self, name: &Name) -> impl Iterator<Item = SocketAddr> {
+        let mut addresses = Vec::new();
+
+        for record in self.answers.iter().chain(self.additionals.iter()) {
+            if record.name() == name {
+                if let Some(rdata) = record.data() {
+                    match rdata {
+                        RData::A(a) => {
+                            addresses.push(SocketAddr::new(a.0.into(), 0));
+                        }
+                        RData::AAAA(aaaa) => {
+                            addresses.push(SocketAddr::new(aaaa.0.into(), 0));
+                        }
+                        RData::CNAME(cname) => addresses.extend(self.resolve_name(&cname.0)),
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        addresses.into_iter()
     }
 
     pub(super) fn query_type(&self) -> RecordType {

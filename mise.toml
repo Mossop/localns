@@ -11,7 +11,7 @@ sources = ["test_resources/containers/**/*"]
 outputs = ["test_resources/containers/.containers_built"]
 
 [tasks.kill_containers]
-run = "docker container ls -f 'label=localns.testcontainer=1' -q | xargs -r docker rm -f"
+run = "docker container ls -a -f 'label=localns.testcontainer=1' -q | xargs -r docker rm -f"
 
 [tasks.test]
 depends = ["build_test_containers", "kill_containers"]

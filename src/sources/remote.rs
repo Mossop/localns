@@ -58,7 +58,6 @@ async fn remote_loop<S: RecordServer>(
     server: S,
     source_id: SourceId,
     remote_config: RemoteConfig,
-    client: Client,
     seen_sources: Arc<Mutex<HashMap<SourceId, DateTime<Utc>>>>,
 ) {
     let mut backoff = Backoff::new(remote_config.interval_ms.unwrap_or(POLL_INTERVAL_MS));
@@ -68,6 +67,8 @@ async fn remote_loop<S: RecordServer>(
         url = %remote_config.url,
         "Attempting to connect to remote server",
     );
+
+    let client = server.http_client();
 
     let mut previous_sources: HashMap<SourceId, DateTime<Utc>> = HashMap::new();
 
@@ -179,14 +180,12 @@ impl SourceConfig for RemoteConfig {
         let seen_sources = Arc::new(Mutex::new(HashMap::new()));
 
         let handle = {
-            let client = Client::new();
             let config = self.clone();
 
             tokio::spawn(remote_loop(
                 server.clone(),
                 source_id,
                 config.clone(),
-                client.clone(),
                 seen_sources.clone(),
             ))
         };

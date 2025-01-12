@@ -1,7 +1,12 @@
-use std::{sync::Arc, time::Duration};
+use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
+use anyhow::Error;
+use futures::FutureExt;
 use hickory_server::{
-    proto::rr::{self, Name},
+    proto::{
+        op::Query,
+        rr::{self, Name, RecordType},
+    },
     ServerFuture,
 };
 use serde::Deserialize;
@@ -37,6 +42,26 @@ pub(crate) struct ServerState<Z> {
     pub(crate) zones: Arc<RwLock<Z>>,
 }
 
+async fn resolve_name<Z: ZoneConfigProvider + Clone>(
+    server_state: ServerState<Z>,
+    name: String,
+) -> Result<
+    Box<dyn Iterator<Item = SocketAddr> + Send + 'static>,
+    Box<dyn std::error::Error + Send + Sync + 'static>,
+> {
+    let locked = server_state.locked().await;
+    let items = locked.resolve_http_address(name).await.unwrap_or_default();
+    Ok(Box::new(items.into_iter()))
+}
+
+impl<Z: ZoneConfigProvider + Clone + Send + Sync + 'static> reqwest::dns::Resolve
+    for ServerState<Z>
+{
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        resolve_name(self.clone(), name.as_str().to_string()).boxed()
+    }
+}
+
 pub(crate) struct LockedServerState<Z> {
     pub(crate) records: RecordSet,
     pub(crate) zones: Z,
@@ -69,6 +94,26 @@ impl<Z: Clone> ServerState<Z> {
 }
 
 impl<Z: ZoneConfigProvider> LockedServerState<Z> {
+    #[instrument(skip(self))]
+    async fn resolve_http_address(&self, name: String) -> Result<Vec<SocketAddr>, Error> {
+        let mut name = Name::from_str(&name)?;
+        name.set_fqdn(true);
+
+        let mut results = Vec::<SocketAddr>::new();
+
+        let query = Query::query(name.clone(), RecordType::A);
+        let mut query_state = QueryState::new(query, true);
+        self.perform_query(&mut query_state).await;
+        results.extend(query_state.resolve_name(&name));
+
+        let query = Query::query(name.clone(), RecordType::AAAA);
+        let mut query_state = QueryState::new(query, true);
+        self.perform_query(&mut query_state).await;
+        results.extend(query_state.resolve_name(&name));
+
+        Ok(results)
+    }
+
     async fn lookup_name(&self, name: &Name, query_state: &mut QueryState) {
         let fqdn = Fqdn::from(name.clone());
         let config = self.zones.zone_config(&fqdn);

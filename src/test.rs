@@ -11,7 +11,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use hickory_server::proto::rr::{domain::Name, rdata, RData};
-use reqwest::header::HeaderValue;
+use reqwest::{header::HeaderValue, Client};
 use tempfile::{tempdir, TempDir};
 use testcontainers::{
     core::{wait::HttpWaitStrategy, ContainerPort, Mount, WaitFor},
@@ -36,7 +36,7 @@ async fn timeout<F, O>(fut: F) -> O
 where
     F: IntoFuture<Output = O>,
 {
-    match time::timeout(Duration::from_secs(20), fut).await {
+    match time::timeout(Duration::from_secs(5), fut).await {
         Ok(o) => o,
         Err(_) => panic!("Timed out waiting for expected state"),
     }
@@ -70,6 +70,7 @@ pub(crate) struct MultiSourceServer {
     records: Arc<Mutex<HashMap<SourceId, RecordSet>>>,
     sender: watch::Sender<HashMap<SourceId, RecordSet>>,
     receiver: watch::Receiver<HashMap<SourceId, RecordSet>>,
+    http_client: Client,
 }
 
 impl MultiSourceServer {
@@ -81,6 +82,7 @@ impl MultiSourceServer {
             records: Default::default(),
             sender,
             receiver,
+            http_client: Client::new(),
         }
     }
 
@@ -171,6 +173,10 @@ impl SingleSourceServer {
 impl RecordServer for SingleSourceServer {
     type UpdateGuard = <MultiSourceServer as RecordServer>::UpdateGuard;
 
+    fn http_client(&self) -> Client {
+        self.inner.http_client()
+    }
+
     async fn start_batch_update(&self) -> Self::UpdateGuard {
         self.inner.start_batch_update().await
     }
@@ -192,6 +198,10 @@ impl RecordServer for SingleSourceServer {
 
 impl RecordServer for MultiSourceServer {
     type UpdateGuard = BatchGuard;
+
+    fn http_client(&self) -> Client {
+        self.http_client.clone()
+    }
 
     async fn start_batch_update(&self) -> Self::UpdateGuard {
         let _guard = self.records.lock().await;
@@ -449,7 +459,7 @@ mod integration {
 
     #[tracing_test::traced_test]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test1() {
+    async fn coredns_compare() {
         let temp_dir = TempDir::new().unwrap();
         let config_file = temp_dir.path().join("config.yml");
 
@@ -606,6 +616,89 @@ zones:
             true,
         )
         .await;
+
+        server.shutdown().await;
+    }
+
+    #[tracing_test::traced_test]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn http_resolve() {
+        let traefik = traefik_container(
+            r#"http:
+  routers:
+    test-router:
+      entryPoints:
+      - http
+      service: test-service
+      rule: Host(`test.example.org`)
+    api2:
+      rule: Host(`traefik.home.local`)
+      service: api@internal
+
+  services:
+    test-service:
+      loadBalancer:
+        servers:
+        - url: http://foo.bar.com/
+"#,
+        )
+        .await;
+        let traefik_port = traefik.get_tcp_port(80).await;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config_file = temp_dir.path().join("config.yml");
+
+        write_file(
+            &temp_dir.path().join("file1.yml"),
+            "traefik.home.local: 127.0.0.1".to_string(),
+        )
+        .await;
+
+        write_file(
+            &config_file,
+            format!(
+                r#"
+server:
+  port: 53532
+
+sources:
+  file:
+    file1: file1.yml
+  traefik:
+    traefik1:
+      url: 'http://traefik.home.local:{traefik_port}/api/'
+      interval_ms: 100
+"#,
+            ),
+        )
+        .await;
+
+        let server = Server::new(&config_file).await.unwrap();
+        let localns_address = "127.0.0.1:53532";
+
+        wait_for_response(localns_address, &name("test.example.org."), RecordType::A).await;
+
+        let response = lookup(
+            localns_address,
+            &name("test.example.org."),
+            RecordType::A,
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.response_code(), ResponseCode::NoError);
+        let mut answers = response.answers().to_vec();
+        answers.sort();
+        assert_eq!(answers.len(), 2);
+
+        let answer = answers.first().unwrap();
+        assert_eq!(answer.name(), &name("traefik.home.local."));
+        assert_eq!(answer.data().unwrap(), &rdata_a("127.0.0.1"));
+
+        let answer = answers.get(1).unwrap();
+        assert_eq!(answer.name(), &name("test.example.org."));
+        assert_eq!(answer.data().unwrap(), &rdata_cname("traefik.home.local"));
 
         server.shutdown().await;
     }

@@ -195,12 +195,13 @@ async fn traefik_loop<S: RecordServer>(
     server: S,
     source_id: SourceId,
     traefik_config: TraefikConfig,
-    client: Client,
 ) -> LoopResult {
     tracing::trace!(
         %source_id,
         "Attempting to connect to traefik API",
     );
+
+    let client = server.http_client();
 
     let version =
         match api_call::<ApiVersion>(&source_id, &client, &traefik_config.url, "version").await {
@@ -243,12 +244,11 @@ impl SourceConfig for TraefikConfig {
     ) -> Result<SourceHandle<S>, Error> {
         let handle = {
             let backoff = RunLoop::new(self.interval_ms.unwrap_or(POLL_INTERVAL_MS));
-            let client = Client::new();
             let config = self.clone();
 
             tokio::spawn(
                 backoff.run(server.clone(), source_id, move |server, source_id| {
-                    traefik_loop(server, source_id, config.clone(), client.clone())
+                    traefik_loop(server, source_id, config.clone())
                 }),
             )
         };

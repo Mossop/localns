@@ -15,6 +15,7 @@ use std::{
     mem,
     path::{Path, PathBuf},
     sync::Arc,
+    sync::Mutex as SyncMutex,
 };
 
 pub use anyhow::Error;
@@ -80,6 +81,10 @@ pub(crate) trait RecordServer
 where
     Self: Send + Sync + Clone + 'static,
 {
+    type UpdateGuard: Send;
+
+    fn start_batch_update(&self) -> impl Future<Output = Self::UpdateGuard> + Send;
+
     fn add_source_records(&self, new_records: SourceRecords) -> impl Future<Output = ()> + Send;
 
     fn clear_source_records(
@@ -91,8 +96,31 @@ where
     async fn prune_sources(&self, keep: &HashSet<SourceId>);
 }
 
+pub(crate) struct BatchGuard {
+    server: Server,
+}
+
+impl Drop for BatchGuard {
+    fn drop(&mut self) {
+        let count = {
+            let mut count = self.server.batch_count.lock().unwrap();
+            *count -= 1;
+            *count
+        };
+
+        if count == 0 {
+            let server = self.server.clone();
+            tokio::spawn(async move {
+                let inner = server.inner.lock().await;
+                server.server_state.replace_records(inner.records()).await;
+            });
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Server {
+    batch_count: Arc<SyncMutex<u8>>,
     server_id: ServerId,
     inner: Arc<Mutex<ServerInner>>,
     sources: Arc<Mutex<Sources<Server>>>,
@@ -127,6 +155,7 @@ impl Server {
         let server_id = sources.server_id();
 
         let server = Self {
+            batch_count: Default::default(),
             server_id,
             inner: Arc::new(Mutex::new(ServerInner {
                 config: config.clone(),
@@ -238,73 +267,97 @@ impl Server {
 }
 
 impl RecordServer for Server {
+    type UpdateGuard = BatchGuard;
+
+    async fn start_batch_update(&self) -> Self::UpdateGuard {
+        let _guard = self.inner.lock().await;
+
+        let mut count = self.batch_count.lock().unwrap();
+        *count += 1;
+
+        BatchGuard {
+            server: self.clone(),
+        }
+    }
+
     async fn add_source_records(&self, new_records: SourceRecords) {
-        let records = {
-            let mut changed = true;
-            let mut inner = self.inner.lock().await;
+        let mut changed = true;
+        let mut inner = self.inner.lock().await;
 
-            inner
-                .records
-                .entry(new_records.source_id.clone())
-                .and_modify(|current| {
-                    if new_records.timestamp < current.timestamp {
-                        changed = false;
-                        return;
-                    }
+        inner
+            .records
+            .entry(new_records.source_id.clone())
+            .and_modify(|current| {
+                if new_records.timestamp < current.timestamp {
+                    changed = false;
+                    return;
+                }
 
-                    current.timestamp = new_records.timestamp;
-                    if new_records.records == current.records {
-                        changed = false;
-                        return;
-                    }
+                current.timestamp = new_records.timestamp;
+                if new_records.records == current.records {
+                    changed = false;
+                    return;
+                }
 
-                    current.records = new_records.records.clone();
-                })
-                .or_insert(new_records);
+                current.records = new_records.records.clone();
+            })
+            .or_insert(new_records);
 
-            if !changed {
-                return;
-            }
+        if !changed {
+            return;
+        }
 
-            inner.records()
+        let can_update = {
+            let batch_count = self.batch_count.lock().unwrap();
+            *batch_count == 0
         };
 
-        self.server_state.replace_records(records).await;
+        if can_update {
+            self.server_state.replace_records(inner.records()).await;
+        }
     }
 
     async fn clear_source_records(&self, source_id: &SourceId, timestamp: DateTime<Utc>) {
         let mut inner = self.inner.lock().await;
 
-        let must_update = if let Some(old) = inner.records.get(source_id) {
+        if let Some(old) = inner.records.get(source_id) {
             if old.timestamp > timestamp {
                 return;
             }
-
-            !old.records.is_empty()
         } else {
             return;
-        };
+        }
 
-        inner.records.remove(source_id);
-        if must_update {
-            let records = inner.records();
-            self.server_state.replace_records(records).await;
+        if let Some(old) = inner.records.remove(source_id) {
+            if !old.records.is_empty() {
+                let can_update = {
+                    let batch_count = self.batch_count.lock().unwrap();
+                    *batch_count == 0
+                };
+
+                if can_update {
+                    self.server_state.replace_records(inner.records()).await;
+                }
+            }
         }
     }
 
     async fn prune_sources(&self, keep: &HashSet<SourceId>) {
-        let records = {
-            let mut inner = self.inner.lock().await;
+        let mut inner = self.inner.lock().await;
 
-            let all = inner.records.keys().cloned().collect::<HashSet<SourceId>>();
-            for old in all.difference(keep) {
-                inner.records.remove(old);
-            }
+        let all = inner.records.keys().cloned().collect::<HashSet<SourceId>>();
+        for old in all.difference(keep) {
+            inner.records.remove(old);
+        }
 
-            inner.records()
+        let can_update = {
+            let batch_count = self.batch_count.lock().unwrap();
+            *batch_count == 0
         };
 
-        self.server_state.replace_records(records).await;
+        if can_update {
+            self.server_state.replace_records(inner.records()).await;
+        }
     }
 }
 

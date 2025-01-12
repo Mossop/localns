@@ -5,6 +5,7 @@ use std::{
     path::Path,
     str::FromStr,
     sync::Arc,
+    sync::Mutex as SyncMutex,
     time::Duration,
 };
 
@@ -41,8 +42,31 @@ where
     }
 }
 
+pub(crate) struct BatchGuard {
+    server: MultiSourceServer,
+}
+
+impl Drop for BatchGuard {
+    fn drop(&mut self) {
+        let count = {
+            let mut count = self.server.batch_count.lock().unwrap();
+            *count -= 1;
+            *count
+        };
+
+        if count == 0 {
+            let server = self.server.clone();
+            tokio::spawn(async move {
+                let records = server.records.lock().await;
+                server.sender.send(records.clone()).unwrap();
+            });
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct MultiSourceServer {
+    batch_count: Arc<SyncMutex<u8>>,
     records: Arc<Mutex<HashMap<SourceId, RecordSet>>>,
     sender: watch::Sender<HashMap<SourceId, RecordSet>>,
     receiver: watch::Receiver<HashMap<SourceId, RecordSet>>,
@@ -53,6 +77,7 @@ impl MultiSourceServer {
         let (sender, receiver) = watch::channel(HashMap::new());
 
         Self {
+            batch_count: Default::default(),
             records: Default::default(),
             sender,
             receiver,
@@ -144,6 +169,12 @@ impl SingleSourceServer {
 }
 
 impl RecordServer for SingleSourceServer {
+    type UpdateGuard = <MultiSourceServer as RecordServer>::UpdateGuard;
+
+    async fn start_batch_update(&self) -> Self::UpdateGuard {
+        self.inner.start_batch_update().await
+    }
+
     async fn add_source_records(&self, new_records: SourceRecords) {
         assert_eq!(new_records.source_id, self.source_id);
         self.inner.add_source_records(new_records).await;
@@ -160,6 +191,19 @@ impl RecordServer for SingleSourceServer {
 }
 
 impl RecordServer for MultiSourceServer {
+    type UpdateGuard = BatchGuard;
+
+    async fn start_batch_update(&self) -> Self::UpdateGuard {
+        let _guard = self.records.lock().await;
+
+        let mut count = self.batch_count.lock().unwrap();
+        *count += 1;
+
+        BatchGuard {
+            server: self.clone(),
+        }
+    }
+
     async fn add_source_records(&self, new_records: SourceRecords) {
         trace!(
             source = %new_records.source_id,
@@ -169,7 +213,11 @@ impl RecordServer for MultiSourceServer {
 
         let mut records = self.records.lock().await;
         records.insert(new_records.source_id, new_records.records);
-        self.sender.send(records.clone()).unwrap();
+
+        let batch_count = self.batch_count.lock().unwrap();
+        if *batch_count == 0 {
+            self.sender.send(records.clone()).unwrap();
+        }
     }
 
     async fn clear_source_records(&self, source_id: &SourceId, timestamp: DateTime<Utc>) {
@@ -181,7 +229,11 @@ impl RecordServer for MultiSourceServer {
 
         let mut records = self.records.lock().await;
         records.remove(source_id);
-        self.sender.send(records.clone()).unwrap();
+
+        let batch_count = self.batch_count.lock().unwrap();
+        if *batch_count == 0 {
+            self.sender.send(records.clone()).unwrap();
+        }
     }
 
     async fn prune_sources(&self, keep: &HashSet<SourceId>) {
@@ -194,7 +246,11 @@ impl RecordServer for MultiSourceServer {
         {
             records.remove(old_key);
         }
-        self.sender.send(records.clone()).unwrap();
+
+        let batch_count = self.batch_count.lock().unwrap();
+        if *batch_count == 0 {
+            self.sender.send(records.clone()).unwrap();
+        }
     }
 }
 

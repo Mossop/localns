@@ -170,12 +170,24 @@ impl<S: RecordServer> Sources<S> {
         self.server_id
     }
 
-    async fn add_sources<C>(
+    async fn list_sources<C>(
+        &mut self,
+        sources: &HashMap<String, C>,
+        seen_sources: &mut HashSet<SourceId>,
+    ) where
+        C: SourceConfig,
+    {
+        for name in sources.keys() {
+            let source_id = SourceId::new(&self.server_id, C::source_type(), name);
+            seen_sources.insert(source_id.clone());
+        }
+    }
+
+    async fn spawn_sources<C>(
         &mut self,
         sources: HashMap<String, C>,
         old_sources: Option<&HashMap<String, C>>,
         server: &S,
-        seen_sources: &mut HashSet<SourceId>,
     ) where
         C: SourceConfig,
     {
@@ -184,10 +196,12 @@ impl<S: RecordServer> Sources<S> {
             let source_id = SourceId::new(&self.server_id, C::source_type(), &name);
             let previous = old_sources.and_then(|c| c.get(&name));
 
-            seen_sources.insert(source_id.clone());
-
             if Some(&source_config) != previous {
-                self.sources.remove(&source_id);
+                let _guard = server.start_batch_update().await;
+
+                if let Some(handle) = self.sources.remove(&source_id) {
+                    handle.drop().await;
+                }
 
                 match source_config.spawn(source_id.clone(), server).await {
                     Ok(handle) => {
@@ -207,61 +221,74 @@ impl<S: RecordServer> Sources<S> {
         config: Config,
         old_config: Option<&Config>,
     ) {
-        let mut seen_sources: HashSet<SourceId> = HashSet::new();
+        {
+            // First enumerate the configured sources and drop those that are no longer present.
+            let _guard = server.start_batch_update().await;
+
+            let mut seen_sources: HashSet<SourceId> = HashSet::new();
+
+            self.list_sources(&config.sources.dhcp, &mut seen_sources)
+                .await;
+            self.list_sources(&config.sources.file, &mut seen_sources)
+                .await;
+            self.list_sources(&config.sources.docker, &mut seen_sources)
+                .await;
+            self.list_sources(&config.sources.traefik, &mut seen_sources)
+                .await;
+            self.list_sources(&config.sources.remote, &mut seen_sources)
+                .await;
+
+            let all = self.sources.keys().cloned().collect::<HashSet<SourceId>>();
+            for old in all.difference(&seen_sources) {
+                if let Some(handle) = self.sources.remove(old) {
+                    handle.drop().await;
+                }
+            }
+
+            server.prune_sources(&seen_sources).await;
+        }
+
+        // Now install the new sources.
 
         // DHCP is assumed to not need any additional resolution.
-        self.add_sources(
+        self.spawn_sources(
             config.sources.dhcp,
             old_config.map(|c| &c.sources.dhcp),
             server,
-            &mut seen_sources,
         )
         .await;
 
         // File sources are assumed to not need any additional resolution.
-        self.add_sources(
+        self.spawn_sources(
             config.sources.file,
             old_config.map(|c| &c.sources.file),
             server,
-            &mut seen_sources,
         )
         .await;
 
         // Docker hostname may depend on DHCP records above.
-        self.add_sources(
+        self.spawn_sources(
             config.sources.docker,
             old_config.map(|c| &c.sources.docker),
             server,
-            &mut seen_sources,
         )
         .await;
 
         // Traefik hostname may depend on Docker or DHCP records.
-        self.add_sources(
+        self.spawn_sources(
             config.sources.traefik,
             old_config.map(|c| &c.sources.traefik),
             server,
-            &mut seen_sources,
         )
         .await;
 
         // Remote hostname may depend on anything.
-        self.add_sources(
+        self.spawn_sources(
             config.sources.remote,
             old_config.map(|c| &c.sources.remote),
             server,
-            &mut seen_sources,
         )
         .await;
-
-        let all = self.sources.keys().cloned().collect::<HashSet<SourceId>>();
-        for old in all.difference(&seen_sources) {
-            if let Some(handle) = self.sources.remove(old) {
-                handle.drop().await;
-            }
-        }
-
-        server.prune_sources(&seen_sources).await;
     }
 
     pub(crate) async fn shutdown(&mut self) {

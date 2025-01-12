@@ -81,8 +81,11 @@ async fn remote_loop<S: RecordServer>(
                     r
                 }
                 Err(e) => {
-                    for (source_id, timestamp) in previous_sources.drain() {
-                        server.clear_source_records(&source_id, timestamp).await;
+                    {
+                        let _guard = server.start_batch_update().await;
+                        for (source_id, timestamp) in previous_sources.drain() {
+                            server.clear_source_records(&source_id, timestamp).await;
+                        }
                     }
 
                     seen_sources.lock().await.clear();
@@ -112,16 +115,19 @@ async fn remote_loop<S: RecordServer>(
             .map(|sr| (sr.source_id.clone(), sr.timestamp))
             .collect();
 
-        for (old_source, timestamp) in old_sources {
-            if !previous_sources.contains_key(&old_source) {
-                server.clear_source_records(&old_source, timestamp).await;
+        {
+            let _guard = server.start_batch_update().await;
+            for (old_source, timestamp) in old_sources {
+                if !previous_sources.contains_key(&old_source) {
+                    server.clear_source_records(&old_source, timestamp).await;
+                }
             }
-        }
 
-        for source_records in api_records.source_records {
-            record_count += source_records.records.len();
+            for source_records in api_records.source_records {
+                record_count += source_records.records.len();
 
-            server.add_source_records(source_records).await;
+                server.add_source_records(source_records).await;
+            }
         }
 
         seen_sources.lock().await.clone_from(&previous_sources);
@@ -148,6 +154,7 @@ impl<S: RecordServer> RemoteRecords<S> {
 
         let mut sources = self.seen_sources.lock().await;
 
+        let _guard = self.server.start_batch_update().await;
         for (source_id, timestamp) in sources.drain() {
             self.server
                 .clear_source_records(&source_id, timestamp)
@@ -264,23 +271,17 @@ mod tests {
             [
                 (
                     &remote_source_1,
-                    &[
-                        (
-                            fqdn("www.test.local"),
-                            RData::A("10.5.23.43".parse().unwrap()),
-                        ),
-                        (fqdn("1.test.local"), RData::A("10.9.34.5".parse().unwrap())),
-                    ],
+                    &[(
+                        fqdn("www.test.local"),
+                        RData::A("10.5.23.43".parse().unwrap()),
+                    )],
                 ),
                 (
                     &remote_source_2,
-                    &[
-                        (
-                            fqdn("www.test.local"),
-                            RData::A("10.4.2.4".parse().unwrap()),
-                        ),
-                        (fqdn("2.test.local"), RData::A("10.8.12.4".parse().unwrap())),
-                    ],
+                    &[(
+                        fqdn("www.test.local"),
+                        RData::A("10.4.2.4".parse().unwrap()),
+                    )],
                 ),
             ],
         );
@@ -307,25 +308,21 @@ mod tests {
 
         let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
 
-        test_server
-            .wait_for_records(|records| records.has_name(&name("1.test.local.")))
-            .await;
-
         let records = test_server
-            .wait_for_records(|records| records.has_name(&name("2.test.local.")))
+            .wait_for_records(|records| records.has_name(&name("www.test.local.")))
             .await;
 
         assert_eq!(records.len(), 2);
 
         let records_1 = records.get(&remote_source_1).unwrap();
-        assert_eq!(records_1.len(), 2);
+        assert_eq!(records_1.len(), 1);
         assert!(records_1.contains(
             &fqdn("www.test.local"),
             &RData::A("10.5.23.43".parse().unwrap())
         ));
 
         let records_2 = records.get(&remote_source_2).unwrap();
-        assert_eq!(records_2.len(), 2);
+        assert_eq!(records_2.len(), 1);
         assert!(records_2.contains(
             &fqdn("www.test.local"),
             &RData::A("10.4.2.4".parse().unwrap())

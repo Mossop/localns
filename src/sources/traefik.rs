@@ -1,6 +1,9 @@
+use std::time::Duration;
+
 use anyhow::bail;
 use reqwest::{Client, Url};
 use serde::{de::DeserializeOwned, Deserialize};
+use tokio::time::sleep;
 use tracing::instrument;
 
 use crate::{
@@ -215,20 +218,29 @@ async fn traefik_loop<S: RecordServer>(
         "Connected to traefik",
     );
 
-    let routers =
-        match api_call::<Vec<ApiRouter>>(&source_id, &client, &traefik_config.url, "http/routers")
-            .await
+    loop {
+        let routers = match api_call::<Vec<ApiRouter>>(
+            &source_id,
+            &client,
+            &traefik_config.url,
+            "http/routers",
+        )
+        .await
         {
             Ok(r) => r,
             Err(result) => return result,
         };
 
-    let records = generate_records(&source_id, &traefik_config, routers);
-    server
-        .add_source_records(SourceRecords::new(&source_id, None, records))
-        .await;
+        let records = generate_records(&source_id, &traefik_config, routers);
+        server
+            .add_source_records(SourceRecords::new(&source_id, None, records))
+            .await;
 
-    LoopResult::Sleep
+        sleep(Duration::from_millis(
+            traefik_config.interval_ms.unwrap_or(POLL_INTERVAL_MS),
+        ))
+        .await;
+    }
 }
 
 impl SourceConfig for TraefikConfig {

@@ -12,11 +12,11 @@ use uuid::Uuid;
 
 use crate::{config::Config, dns::RecordSet, watcher::Watcher, Error, RecordServer, ServerId};
 
-mod dhcp;
-mod docker;
-mod file;
-mod remote;
-mod traefik;
+pub(crate) mod dhcp;
+pub(crate) mod docker;
+pub(crate) mod file;
+pub(crate) mod remote;
+pub(crate) mod traefik;
 
 trait SourceConfig: PartialEq {
     fn source_type() -> SourceType;

@@ -34,7 +34,7 @@ pub(crate) struct DockerTls {
 pub(crate) enum DockerConfig {
     Address(String),
     Tls(Box<DockerTls>),
-    Local,
+    Local {},
 }
 
 type Labels = HashMap<String, String>;
@@ -155,7 +155,7 @@ fn connect(source_id: &SourceId, docker_config: &DockerConfig) -> Result<Docker,
                 Docker::connect_with_local(address, DOCKER_TIMEOUT, API_DEFAULT_VERSION)?
             }
         }
-        DockerConfig::Local => {
+        DockerConfig::Local {} => {
             tracing::trace!("Attempting to connect to local docker daemon");
 
             Docker::connect_with_local_defaults()?
@@ -430,7 +430,7 @@ mod tests {
             source_name: "test".to_string(),
         };
 
-        let config = DockerConfig::Local;
+        let config = DockerConfig::Local {};
 
         let mut test_server = SingleSourceServer::new(&source_id);
 

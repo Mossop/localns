@@ -201,6 +201,7 @@ mod tests {
 
     use crate::{
         config::{Config, ZoneConfigProvider},
+        sources::docker,
         test::{fqdn, write_file},
     };
 
@@ -226,6 +227,8 @@ sources:
   remote:
     other:
         url: https://other.local/
+  docker:
+    local: {}
 
 zones:
   home.local: {}
@@ -235,7 +238,7 @@ zones:
         )
         .await;
 
-        let config = Config::from_file(&config_file).unwrap_or_default();
+        let config = Config::from_file(&config_file).unwrap();
 
         let zone_config = config.zones.zone_config(&fqdn("nowhere.local"));
 
@@ -258,5 +261,10 @@ zones:
             zone_config.upstreams.get(1).unwrap().config.address(5324),
             "10.10.14.250:5324"
         );
+
+        assert_eq!(config.sources.docker.len(), 1);
+        let (name, docker_config) = config.sources.docker.iter().next().unwrap();
+        assert_eq!(name, "local");
+        assert!(matches!(docker_config, docker::DockerConfig::Local {}));
     }
 }

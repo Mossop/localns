@@ -16,11 +16,17 @@ jobs:
 
       - name: Docker meta
         id: docker_meta
-        uses: docker/metadata-action@v3
+        uses: docker/metadata-action@v5
         with:
           images: ghcr.io/mossop/localns
           tags: |
-            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}.{{minor}}.{{patch}}
+            type=ref,event=branch
+          labels: |
+            org.opencontainers.image.title=LocalNS
+            org.opencontainers.image.description=LocalNS DNS Server
 
       - name: Setup buildx
         uses: docker/setup-buildx-action@v1

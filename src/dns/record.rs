@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::ZoneConfig;
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Hash)]
-#[serde(tag = "type", content = "value")]
+#[serde(tag = "type", content = "value", rename_all = "UPPERCASE")]
 pub(crate) enum RData {
     A(Ipv4Addr),
     Aaaa(Ipv6Addr),

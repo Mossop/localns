@@ -75,7 +75,7 @@ impl<S: RecordServer> Drop for SourceHandle<S> {
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum SourceType {
     File,
     Dhcp,

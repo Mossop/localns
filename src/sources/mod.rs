@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_plain::derive_display_from_serialize;
 use tokio::task::JoinHandle;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::{config::Config, dns::RecordSet, watcher::Watcher, Error, RecordServer, ServerId};
@@ -28,10 +29,7 @@ trait SourceConfig: PartialEq {
     ) -> Result<SourceHandle<S>, Error>;
 }
 
-#[derive(Default)]
 enum SourceHandle<S: RecordServer> {
-    #[default]
-    None,
     Spawned(JoinHandle<()>),
     #[allow(dead_code)]
     Watcher(Watcher),
@@ -70,7 +68,9 @@ impl<S: RecordServer> SourceHandle<S> {
 
 impl<S: RecordServer> Drop for SourceHandle<S> {
     fn drop(&mut self) {
-        assert!(matches!(self, SourceHandle::None));
+        warn!("Source handle was not correctly dropped.");
+        #[cfg(test)]
+        panic!("Source handle was not correctly dropped.");
     }
 }
 

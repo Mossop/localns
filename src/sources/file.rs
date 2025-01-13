@@ -123,6 +123,16 @@ impl SourceConfig for FileConfig {
         tracing::trace!("Adding source");
         let zone_file = self.relative();
 
+        let watcher = watch(
+            &zone_file.clone(),
+            SourceWatcher {
+                source_id: source_id.clone(),
+                server: server.clone(),
+                zone_file: zone_file.clone(),
+            },
+        )
+        .await?;
+
         match parse_file(&source_id, &zone_file) {
             Ok(records) => {
                 server
@@ -134,15 +144,6 @@ impl SourceConfig for FileConfig {
                 server.clear_source_records(&source_id, Utc::now()).await;
             }
         }
-
-        let watcher = watch(
-            &zone_file.clone(),
-            SourceWatcher {
-                source_id: source_id.clone(),
-                server: server.clone(),
-                zone_file,
-            },
-        )?;
 
         Ok(watcher.into())
     }

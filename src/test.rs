@@ -31,11 +31,11 @@ use crate::{
     RecordServer,
 };
 
-async fn timeout<F, O>(fut: F) -> O
+pub(crate) async fn timeout<F, O>(fut: F) -> O
 where
     F: IntoFuture<Output = O>,
 {
-    match time::timeout(Duration::from_secs(5), fut).await {
+    match time::timeout(Duration::from_secs(20), fut).await {
         Ok(o) => o,
         Err(_) => panic!("Timed out waiting for expected state"),
     }

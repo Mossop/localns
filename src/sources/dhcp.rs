@@ -101,24 +101,26 @@ impl SourceConfig for DhcpConfig {
     ) -> Result<SourceHandle<S>, Error> {
         tracing::trace!("Adding source");
         let lease_file = self.lease_file.relative();
+        let zone = self.zone.clone();
+
+        let watcher = watch(
+            &lease_file.clone(),
+            SourceWatcher {
+                source_id: source_id.clone(),
+                server: server.clone(),
+                dhcp_config: self,
+                lease_file: lease_file.clone(),
+            },
+        )
+        .await?;
 
         server
             .add_source_records(SourceRecords::new(
                 &source_id,
                 None,
-                parse_file(&source_id, &self.zone, &lease_file).await,
+                parse_file(&source_id, &zone, &lease_file).await,
             ))
             .await;
-
-        let watcher = watch(
-            &lease_file.clone(),
-            SourceWatcher {
-                source_id,
-                server: server.clone(),
-                dhcp_config: self,
-                lease_file,
-            },
-        )?;
 
         Ok(watcher.into())
     }

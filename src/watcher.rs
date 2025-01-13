@@ -1,13 +1,12 @@
 use std::{
-    fs,
     future::Future,
-    mem,
     path::{Path, PathBuf},
     time::Duration,
 };
 
-use notify::{Config, Event, EventHandler, PollWatcher, RecursiveMode, Watcher as _};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use sha2::{Digest, Sha256};
+use tokio::{fs::File, io::AsyncReadExt, task::JoinHandle, time::sleep};
+use tracing::trace;
 
 use crate::Error;
 
@@ -25,91 +24,91 @@ where
     fn event(&mut self, event: FileEvent) -> impl Future<Output = ()> + Send;
 }
 
-struct FileWatchState {
-    sender: UnboundedSender<FileEvent>,
-    path: PathBuf,
-    exists: bool,
-}
-
-impl FileWatchState {
-    fn new<L: WatchListener>(path: &Path, mut listener: L) -> Self {
-        let (sender, mut receiver) = unbounded_channel();
-
-        tokio::spawn(async move {
-            while let Some(event) = receiver.recv().await {
-                listener.event(event).await;
-            }
-        });
-
-        Self {
-            path: path.to_owned(),
-            exists: fs::exists(path).unwrap_or_default(),
-            sender,
-        }
-    }
-}
-
-impl EventHandler for FileWatchState {
-    fn handle_event(&mut self, event: Result<Event, notify::Error>) {
-        if let Ok(ref event) = event {
-            if !event.need_rescan() && !event.paths.contains(&self.path) {
-                return;
-            }
-        }
-
-        let now_exists = fs::exists(&self.path).unwrap_or_default();
-        let mut did_exist = now_exists;
-        mem::swap(&mut self.exists, &mut did_exist);
-
-        let event = match (now_exists, did_exist) {
-            (true, false) => FileEvent::Create,
-            (false, true) => FileEvent::Delete,
-            (true, _) => FileEvent::Change,
-            _ => return,
-        };
-
-        if let Err(e) = self.sender.send(event) {
-            tracing::error!(error = %e, "Error sending file event")
-        }
-    }
-}
-
 pub(crate) struct Watcher {
     path: PathBuf,
-    _watcher: PollWatcher,
+    handle: JoinHandle<()>,
 }
 
 impl Drop for Watcher {
     fn drop(&mut self) {
         tracing::trace!(path = %self.path.display(), "Dropping file watcher");
+        self.handle.abort();
     }
 }
 
-pub(crate) fn watch<L: WatchListener>(path: &Path, listener: L) -> Result<Watcher, Error> {
+impl Watcher {
+    async fn fetch_state(path: &Path) -> Option<[u8; 32]> {
+        let mut file = File::open(path).await.ok()?;
+        let mut buffer = [0_u8; 65536];
+
+        let mut hasher = Sha256::new();
+
+        loop {
+            let len = file.read(&mut buffer).await.ok()?;
+
+            if len == 0 {
+                break;
+            }
+
+            hasher.update(&buffer[0..len]);
+        }
+
+        let mut output = [0_u8; 32];
+        output.copy_from_slice(hasher.finalize().as_slice());
+
+        Some(output)
+    }
+
+    async fn watch_loop<L: WatchListener>(
+        path: PathBuf,
+        interval: Duration,
+        mut state: Option<[u8; 32]>,
+        mut listener: L,
+    ) {
+        trace!(present = state.is_some(), "Got initial state");
+
+        loop {
+            sleep(interval).await;
+
+            let new_state = Watcher::fetch_state(&path).await;
+            trace!(present = new_state.is_some(), "Got new state");
+
+            if new_state != state {
+                let event = match (state, new_state) {
+                    (None, _) => FileEvent::Create,
+                    (_, None) => FileEvent::Delete,
+                    _ => FileEvent::Change,
+                };
+
+                listener.event(event).await;
+
+                state = new_state;
+            }
+        }
+    }
+}
+
+pub(crate) async fn watch<L: WatchListener>(path: &Path, listener: L) -> Result<Watcher, Error> {
     tracing::trace!(path = %path.display(), "Starting file watcher");
 
-    let watch_state = FileWatchState::new(path, listener);
+    let initial_state = Watcher::fetch_state(path).await;
 
-    let config = if cfg!(test) {
-        Config::default()
-            .with_poll_interval(Duration::from_millis(50))
-            .with_compare_contents(true)
+    let interval = if cfg!(test) {
+        Duration::from_millis(50)
     } else {
-        Config::default().with_poll_interval(Duration::from_millis(500))
+        Duration::from_millis(500)
     };
 
-    let mut watcher = PollWatcher::new(watch_state, config)?;
-
-    let watch_path = match path.parent() {
-        Some(parent) => parent,
-        None => path,
-    };
-
-    watcher.watch(watch_path, RecursiveMode::Recursive)?;
+    let handle = tokio::spawn(Watcher::watch_loop(
+        path.to_owned(),
+        interval,
+        initial_state,
+        listener,
+    ));
 
     Ok(Watcher {
         path: path.to_owned(),
-        _watcher: watcher,
+        handle,
     })
 }
 
@@ -123,15 +122,14 @@ mod tests {
     use tempfile::TempDir;
     use tokio::sync::mpsc::{error::TryRecvError, unbounded_channel, UnboundedSender};
 
-    use crate::watcher::{watch, FileEvent, WatchListener};
+    use crate::{
+        test::timeout,
+        watcher::{watch, FileEvent, WatchListener},
+    };
 
-    struct ListenerStream {
-        sender: UnboundedSender<FileEvent>,
-    }
-
-    impl WatchListener for ListenerStream {
+    impl WatchListener for UnboundedSender<FileEvent> {
         async fn event(&mut self, event: FileEvent) {
-            self.sender.send(event).unwrap();
+            self.send(event).unwrap();
         }
     }
 
@@ -139,19 +137,18 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn watcher() {
         let (sender, mut receiver) = unbounded_channel();
-        let listener = ListenerStream { sender };
 
         let temp = TempDir::new().unwrap();
         let target = temp.path().join("test.txt");
 
         {
-            let _watcher = watch(&target, listener).unwrap();
+            let _watcher = watch(&target, sender).await.unwrap();
 
             assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
 
             File::create(&target).unwrap();
 
-            let event = receiver.recv().await;
+            let event = timeout(receiver.recv()).await;
             assert_eq!(event, Some(FileEvent::Create));
 
             {
@@ -159,7 +156,7 @@ mod tests {
                 write!(file, "Hello").unwrap();
             }
 
-            let event = receiver.recv().await;
+            let event = timeout(receiver.recv()).await;
             assert_eq!(event, Some(FileEvent::Change));
 
             {
@@ -167,12 +164,12 @@ mod tests {
                 write!(file, "Other").unwrap();
             }
 
-            let event = receiver.recv().await;
+            let event = timeout(receiver.recv()).await;
             assert_eq!(event, Some(FileEvent::Change));
 
             remove_file(&target).unwrap();
 
-            let event = receiver.recv().await;
+            let event = timeout(receiver.recv()).await;
             assert_eq!(event, Some(FileEvent::Delete));
 
             {
@@ -180,11 +177,11 @@ mod tests {
                 write!(file, "Other").unwrap();
             }
 
-            let event = receiver.recv().await;
+            let event = timeout(receiver.recv()).await;
             assert_eq!(event, Some(FileEvent::Create));
         }
 
-        let event = receiver.recv().await;
+        let event = timeout(receiver.recv()).await;
         assert_eq!(event, None);
     }
 }

@@ -198,7 +198,9 @@ impl Server {
                 config_file: config_path.to_owned(),
                 server: server.clone(),
             },
-        ) {
+        )
+        .await
+        {
             Ok(watcher) => {
                 server.config_watcher.replace(watcher).await;
             }

@@ -6,7 +6,6 @@ use std::{
 
 use sha2::{Digest, Sha256};
 use tokio::{fs::File, io::AsyncReadExt, task::JoinHandle, time::sleep};
-use tracing::trace;
 
 use crate::Error;
 
@@ -65,13 +64,10 @@ impl Watcher {
         mut state: Option<[u8; 32]>,
         mut listener: L,
     ) {
-        trace!(present = state.is_some(), "Got initial state");
-
         loop {
             sleep(interval).await;
 
             let new_state = Watcher::fetch_state(&path).await;
-            trace!(present = new_state.is_some(), "Got new state");
 
             if new_state != state {
                 let event = match (state, new_state) {

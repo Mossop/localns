@@ -8,6 +8,7 @@ use std::{
     str::FromStr,
 };
 
+use anyhow::{anyhow, Error};
 use hickory_server::proto::{
     error::ProtoError,
     rr::{self, rdata, DNSClass, IntoName, Name, RecordType},
@@ -22,22 +23,24 @@ pub(crate) enum RData {
     A(Ipv4Addr),
     Aaaa(Ipv6Addr),
     Cname(Fqdn),
+    Aname(Fqdn),
     Ptr(Fqdn),
 }
 
 impl RData {
-    pub(crate) fn data_type(&self) -> RecordType {
+    pub(crate) fn matches(&self, record_type: RecordType) -> bool {
         match self {
-            RData::A(_) => RecordType::A,
-            RData::Aaaa(_) => RecordType::AAAA,
-            RData::Cname(_) => RecordType::CNAME,
-            RData::Ptr(_) => RecordType::PTR,
+            RData::Cname(_) => true,
+            RData::Aname(_) => matches!(record_type, RecordType::A | RecordType::AAAA),
+            RData::A(_) => record_type == RecordType::A,
+            RData::Aaaa(_) => record_type == RecordType::AAAA,
+            RData::Ptr(_) => record_type == RecordType::PTR,
         }
     }
 }
 
 impl TryInto<rr::RData> for RData {
-    type Error = String;
+    type Error = Error;
 
     fn try_into(self) -> Result<rr::RData, Self::Error> {
         match self {
@@ -45,6 +48,9 @@ impl TryInto<rr::RData> for RData {
             RData::Aaaa(ip) => Ok(rr::RData::AAAA(ip.into())),
             RData::Cname(name) => Ok(rr::RData::CNAME(rdata::CNAME(name.into()))),
             RData::Ptr(name) => Ok(rr::RData::PTR(rdata::PTR(name.into()))),
+            RData::Aname(_) => Err(anyhow!(
+                "ANAME records cannot be converted to DNS responses"
+            )),
         }
     }
 }
@@ -370,10 +376,7 @@ impl RecordSet {
                 Some(records) => Box::new(
                     records
                         .iter()
-                        .filter(move |record| {
-                            let record_type = record.rdata().data_type();
-                            query_type == record_type || record_type == RecordType::CNAME
-                        })
+                        .filter(move |record| record.rdata().matches(query_type))
                         .cloned(),
                 ),
                 None => Box::new(empty()),

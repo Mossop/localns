@@ -1,4 +1,7 @@
-use std::{collections::HashSet, iter::once, net::SocketAddr};
+use std::{
+    collections::{HashMap, HashSet},
+    iter::once,
+};
 
 use hickory_server::proto::{
     op::{Header, Query, ResponseCode},
@@ -10,6 +13,8 @@ pub(super) struct QueryState {
     pub(super) query: Query,
     /// Whether recursion was requested.
     pub(super) recursion_desired: bool,
+    /// Whether to directly resolve aliases.
+    pub(super) resolve_aliases: bool,
 
     /// A list of names that we have already seen
     seen: HashSet<Name>,
@@ -21,8 +26,10 @@ pub(super) struct QueryState {
 
     /// A list of answers to respond with
     answers: Vec<rr::Record>,
-    /// A list of additional records such as resolved CNAMEs.
+    /// A list of additional records.
     additionals: Vec<rr::Record>,
+    /// A list of found alias records that must be resolved.
+    pub(super) aliases: HashMap<Name, Name>,
     pub(super) name_servers: Vec<rr::Record>,
     pub(super) soa: Option<rr::Record>,
 }
@@ -31,42 +38,65 @@ impl QueryState {
     pub(super) fn new(query: Query, recursion_desired: bool) -> Self {
         QueryState {
             seen: HashSet::from_iter(once(query.name().clone())),
-            unknowns: HashSet::new(),
+            unknowns: HashSet::from_iter(once(query.name().clone())),
 
             query,
             recursion_desired,
+            resolve_aliases: false,
 
             recursion_available: true,
             response_code: ResponseCode::NXDomain,
 
             answers: Vec::new(),
             additionals: Vec::new(),
+            aliases: HashMap::new(),
             name_servers: Vec::new(),
             soa: None,
         }
     }
 
-    pub(super) fn resolve_name(&self, name: &Name) -> impl Iterator<Item = SocketAddr> {
-        let mut addresses = Vec::new();
+    pub(super) fn for_aliases(&mut self) -> Self {
+        QueryState {
+            seen: self.seen.clone(),
+            unknowns: self
+                .aliases
+                .values()
+                .filter(|alias| !self.seen.contains(alias))
+                .cloned()
+                .collect(),
+
+            query: self.query.clone(),
+            recursion_desired: self.recursion_desired,
+            resolve_aliases: true,
+
+            recursion_available: true,
+            response_code: ResponseCode::NXDomain,
+
+            answers: self.answers.clone(),
+            additionals: self.additionals.clone(),
+            aliases: HashMap::new(),
+            name_servers: Vec::new(),
+            soa: None,
+        }
+    }
+
+    pub(super) fn resolve_name(&self, name: &Name) -> impl Iterator<Item = RData> {
+        let mut rdata_results = Vec::new();
 
         for record in self.answers.iter().chain(self.additionals.iter()) {
             if record.name() == name {
                 if let Some(rdata) = record.data() {
                     match rdata {
-                        RData::A(a) => {
-                            addresses.push(SocketAddr::new(a.0.into(), 0));
+                        RData::CNAME(cname) => rdata_results.extend(self.resolve_name(&cname.0)),
+                        rdata => {
+                            rdata_results.push(rdata.clone());
                         }
-                        RData::AAAA(aaaa) => {
-                            addresses.push(SocketAddr::new(aaaa.0.into(), 0));
-                        }
-                        RData::CNAME(cname) => addresses.extend(self.resolve_name(&cname.0)),
-                        _ => {}
                     }
                 }
             }
         }
 
-        addresses.into_iter()
+        rdata_results.into_iter()
     }
 
     pub(super) fn query_type(&self) -> RecordType {

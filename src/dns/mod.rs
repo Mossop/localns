@@ -104,12 +104,26 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
         let query = Query::query(name.clone(), RecordType::A);
         let mut query_state = QueryState::new(query, true);
         self.perform_query(&mut query_state).await;
-        results.extend(query_state.resolve_name(&name));
+        results.extend(
+            query_state
+                .resolve_name(&name)
+                .filter_map(|rdata| match rdata {
+                    rr::RData::A(a) => Some(SocketAddr::new(a.0.into(), 0)),
+                    _ => None,
+                }),
+        );
 
         let query = Query::query(name.clone(), RecordType::AAAA);
         let mut query_state = QueryState::new(query, true);
         self.perform_query(&mut query_state).await;
-        results.extend(query_state.resolve_name(&name));
+        results.extend(
+            query_state
+                .resolve_name(&name)
+                .filter_map(|rdata| match rdata {
+                    rr::RData::AAAA(aaaa) => Some(SocketAddr::new(aaaa.0.into(), 0)),
+                    _ => None,
+                }),
+        );
 
         Ok(results)
     }
@@ -122,7 +136,23 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
         let records: Vec<rr::Record> = self
             .records
             .lookup(name, query_state.query_class(), query_state.query_type())
-            .filter_map(|r| r.raw(&config))
+            .filter_map(|record| {
+                if let RData::Aname(fqdn) = record.rdata() {
+                    if !query_state.resolve_aliases {
+                        query_state.aliases.insert(name.clone(), fqdn.name());
+                        None
+                    } else {
+                        // Add this record as a CNAME to allow resolution of the alias.
+                        Some(rr::Record::from_rdata(
+                            name.clone(),
+                            record.ttl.unwrap_or(config.ttl),
+                            rr::RData::CNAME(rr::rdata::CNAME(fqdn.name())),
+                        ))
+                    }
+                } else {
+                    record.raw(&config)
+                }
+            })
             .collect();
 
         if !config.upstreams.is_empty() && name == query_state.query.name() {
@@ -146,6 +176,12 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
         }
     }
 
+    async fn lookup_names(&self, query_state: &mut QueryState) {
+        while let Some(name) = query_state.next_unknown() {
+            self.lookup_name(&name, query_state).await;
+        }
+    }
+
     #[instrument(fields(
         query = %query_state.query.name(),
         qtype = query_state.query.query_type().to_string(),
@@ -153,13 +189,26 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
         request.response_code,
     ), skip(self, query_state))]
     pub(crate) async fn perform_query(&self, query_state: &mut QueryState) {
-        // Lookup the original name.
-        self.lookup_name(&query_state.query.name().clone(), query_state)
-            .await;
+        self.lookup_names(query_state).await;
 
-        // Now lookup any new names that were discovered.
-        while let Some(name) = query_state.next_unknown() {
-            self.lookup_name(&name, query_state).await;
+        if !query_state.aliases.is_empty() {
+            let mut alias_query_state = query_state.for_aliases();
+            self.lookup_names(&mut alias_query_state).await;
+
+            let mut records = Vec::new();
+
+            for (name, alias) in query_state.aliases.iter() {
+                let fqdn = Fqdn::from(name.clone());
+                let config = self.zones.zone_config(&fqdn);
+
+                for rdata in alias_query_state.resolve_name(alias) {
+                    if rdata.record_type() == query_state.query_type() {
+                        records.push(rr::Record::from_rdata(name.clone(), config.ttl, rdata));
+                    }
+                }
+            }
+
+            query_state.add_answers(records);
         }
 
         let span = Span::current();
@@ -241,7 +290,7 @@ mod tests {
     use crate::{
         config::{ZoneConfig, ZoneConfigProvider},
         dns::{query::QueryState, Fqdn, RData, Record, RecordSet, ServerState},
-        test::{fqdn, name, rdata_a, rdata_cname},
+        test::{fqdn, name, rdata_a, rdata_aaaa, rdata_cname},
     };
 
     #[derive(Clone)]
@@ -308,5 +357,127 @@ mod tests {
         assert_eq!(record.dns_class(), DNSClass::IN);
         assert_eq!(record.record_type(), RecordType::A);
         assert_eq!(*record.data().unwrap(), rdata_a("10.10.45.23"));
+    }
+
+    #[tracing_test::traced_test]
+    #[tokio::test]
+    async fn aliases() {
+        let mut records = RecordSet::new();
+        records.insert(Record::new(
+            fqdn("alias.home.local."),
+            RData::Aname(fqdn("target.home.local.")),
+        ));
+        records.insert(Record::new(
+            fqdn("cname.home.local."),
+            RData::Cname(fqdn("alias.home.local.")),
+        ));
+        records.insert(Record::new(
+            fqdn("target.home.local."),
+            RData::A("10.4.2.5".parse().unwrap()),
+        ));
+        records.insert(Record::new(
+            fqdn("target.home.local."),
+            RData::Aaaa("2a00:1450:4009:81e::200e".parse().unwrap()),
+        ));
+        records.insert(Record::new(
+            fqdn("alias2.home.local."),
+            RData::Aname(fqdn("cname.home.local.")),
+        ));
+        records.insert(Record::new(
+            fqdn("badalias.home.local."),
+            RData::Aname(fqdn("unknown.home.local.")),
+        ));
+
+        let server_state = ServerState::new(records, EmptyZones {}).locked().await;
+
+        let mut query_state = QueryState::new(
+            Query::query(name("alias.home.local."), RecordType::A),
+            false,
+        );
+        server_state.perform_query(&mut query_state).await;
+
+        assert_eq!(query_state.response_code, ResponseCode::NoError);
+        let mut answers = query_state.answers().clone();
+        answers.sort();
+        assert_eq!(answers.len(), 1);
+
+        let record = answers.first().unwrap();
+        assert_eq!(*record.name(), name("alias.home.local."));
+        assert_eq!(record.dns_class(), DNSClass::IN);
+        assert_eq!(record.record_type(), RecordType::A);
+        assert_eq!(*record.data().unwrap(), rdata_a("10.4.2.5"));
+
+        let mut query_state = QueryState::new(
+            Query::query(name("alias.home.local."), RecordType::AAAA),
+            false,
+        );
+        server_state.perform_query(&mut query_state).await;
+
+        assert_eq!(query_state.response_code, ResponseCode::NoError);
+        let answers = query_state.answers();
+        assert_eq!(answers.len(), 1);
+
+        let record = answers.first().unwrap();
+        assert_eq!(*record.name(), name("alias.home.local."));
+        assert_eq!(record.dns_class(), DNSClass::IN);
+        assert_eq!(record.record_type(), RecordType::AAAA);
+        assert_eq!(
+            *record.data().unwrap(),
+            rdata_aaaa("2a00:1450:4009:81e::200e")
+        );
+
+        let mut query_state = QueryState::new(
+            Query::query(name("cname.home.local."), RecordType::A),
+            false,
+        );
+        server_state.perform_query(&mut query_state).await;
+
+        assert_eq!(query_state.response_code, ResponseCode::NoError);
+        let mut answers = query_state.answers().clone();
+        answers.sort();
+        assert_eq!(answers.len(), 2);
+
+        let record = answers.first().unwrap();
+        assert_eq!(*record.name(), name("alias.home.local."));
+        assert_eq!(record.dns_class(), DNSClass::IN);
+        assert_eq!(record.record_type(), RecordType::A);
+        assert_eq!(*record.data().unwrap(), rdata_a("10.4.2.5"));
+
+        let record = answers.get(1).unwrap();
+        assert_eq!(*record.name(), name("cname.home.local."));
+        assert_eq!(record.dns_class(), DNSClass::IN);
+        assert_eq!(record.record_type(), RecordType::CNAME);
+        assert_eq!(*record.data().unwrap(), rdata_cname("alias.home.local."));
+
+        let mut query_state = QueryState::new(
+            Query::query(name("alias2.home.local."), RecordType::AAAA),
+            false,
+        );
+        server_state.perform_query(&mut query_state).await;
+
+        assert_eq!(query_state.response_code, ResponseCode::NoError);
+        let mut answers = query_state.answers().clone();
+        answers.sort();
+        assert_eq!(answers.len(), 1);
+
+        let record = answers.first().unwrap();
+        assert_eq!(*record.name(), name("alias2.home.local."));
+        assert_eq!(record.dns_class(), DNSClass::IN);
+        assert_eq!(record.record_type(), RecordType::AAAA);
+        assert_eq!(
+            *record.data().unwrap(),
+            rdata_aaaa("2a00:1450:4009:81e::200e")
+        );
+
+        let mut query_state = QueryState::new(
+            Query::query(name("badalias.home.local."), RecordType::AAAA),
+            false,
+        );
+        server_state.perform_query(&mut query_state).await;
+
+        assert_eq!(query_state.response_code, ResponseCode::NXDomain);
+        let mut answers = query_state.answers().clone();
+        answers.sort();
+        assert_eq!(answers.len(), 0);
     }
 }

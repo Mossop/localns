@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     future::IntoFuture,
-    net::Ipv4Addr,
+    net::{Ipv4Addr, Ipv6Addr},
     path::Path,
     str::FromStr,
     sync::{Arc, Mutex as SyncMutex},
@@ -273,6 +273,10 @@ pub(crate) fn fqdn(n: &str) -> Fqdn {
 
 pub(crate) fn rdata_a(ip: &str) -> RData {
     RData::A(rdata::A(Ipv4Addr::from_str(ip).unwrap()))
+}
+
+pub(crate) fn rdata_aaaa(ip: &str) -> RData {
+    RData::AAAA(rdata::AAAA(Ipv6Addr::from_str(ip).unwrap()))
 }
 
 pub(crate) fn rdata_cname(n: &str) -> RData {

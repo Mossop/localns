@@ -8,7 +8,7 @@ use tracing::instrument;
 
 use crate::{
     config::deserialize_url,
-    dns::{Fqdn, RData, Record, RecordSet},
+    dns::{Fqdn, RData, Record},
     run_loop::{LoopResult, RunLoop},
     sources::{SourceConfig, SourceHandle, SourceId, SourceType},
     Error, RecordServer, SourceRecords,
@@ -152,27 +152,12 @@ fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, Error> {
     }
 }
 
-#[instrument(fields(%source_id), skip(routers, traefik_config))]
-fn generate_records(
+#[instrument(fields(%source_id), skip(routers))]
+fn generate_records<'a>(
     source_id: &SourceId,
-    traefik_config: &TraefikConfig,
-    routers: Vec<ApiRouter>,
-) -> RecordSet {
-    let rdata = if let Some(address) = &traefik_config.address {
-        address.clone()
-    } else if let Some(host) = traefik_config.url.host_str() {
-        match RData::try_from(host) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(error=%e, host, "Invalid url");
-                return RecordSet::new();
-            }
-        }
-    } else {
-        return RecordSet::new();
-    };
-
-    let mut names: Vec<Fqdn> = routers
+    routers: &'a [ApiRouter],
+) -> impl Iterator<Item = Fqdn> + 'a {
+    routers
         .iter()
         .filter_map(|r| match parse_hosts(&r.rule) {
             Ok(hosts) => Some(hosts),
@@ -182,16 +167,6 @@ fn generate_records(
             }
         })
         .flatten()
-        .collect();
-
-    if let RData::Cname(ref name) = rdata {
-        names = names.drain(..).filter(|n| n != name).collect();
-    }
-
-    names
-        .drain(..)
-        .map(|name| Record::new(name, rdata.clone()))
-        .collect()
 }
 
 async fn traefik_loop<S: RecordServer>(
@@ -199,6 +174,26 @@ async fn traefik_loop<S: RecordServer>(
     source_id: SourceId,
     traefik_config: TraefikConfig,
 ) -> LoopResult {
+    let rdata = if let Some(address) = &traefik_config.address {
+        address.clone()
+    } else if let Some(host) = traefik_config.url.host_str() {
+        match RData::try_from(host) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error=%e, host, "Invalid url");
+                return LoopResult::Quit;
+            }
+        }
+    } else {
+        return LoopResult::Quit;
+    };
+
+    let target_name = match &rdata {
+        RData::Cname(name) => Some(name.clone()),
+        RData::Aname(name) => Some(name.clone()),
+        _ => None,
+    };
+
     tracing::trace!(
         %source_id,
         "Attempting to connect to traefik API",
@@ -231,7 +226,16 @@ async fn traefik_loop<S: RecordServer>(
             Err(result) => return result,
         };
 
-        let records = generate_records(&source_id, &traefik_config, routers);
+        let records = generate_records(&source_id, &routers)
+            .filter_map(|fqdn| {
+                if Some(&fqdn) == target_name.as_ref() {
+                    None
+                } else {
+                    Some(Record::new(fqdn, rdata.clone()))
+                }
+            })
+            .collect();
+
         server
             .add_source_records(SourceRecords::new(&source_id, None, records))
             .await;
@@ -401,7 +405,7 @@ mod tests {
 
             assert_eq!(records.len(), 1);
 
-            assert!(records.contains(&fqdn("test.example.org"), &RData::Cname(fqdn("localhost"))));
+            assert!(records.contains(&fqdn("test.example.org"), &RData::Aname(fqdn("localhost"))));
 
             handle.drop().await;
 

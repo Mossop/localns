@@ -214,7 +214,7 @@ other.home.local: www.home.local
 
         assert!(records.contains(
             &fqdn("other.home.local"),
-            &RData::Cname(fqdn("www.home.local"))
+            &RData::Aname(fqdn("www.home.local"))
         ));
 
         write_file(

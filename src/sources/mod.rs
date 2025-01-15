@@ -331,7 +331,9 @@ sources:
             &zone_1,
             r#"
 home.test.local: 10.45.23.56
-www.test.local: home.test.local
+www.test.local:
+    type: CNAME
+    value: home.test.local
 "#,
         )
         .await;
@@ -341,8 +343,12 @@ www.test.local: home.test.local
             &zone_2,
             r#"
 home.other.local: 10.45.23.57
-www.other.local: home.other.local
-test.other.local: home.test.local
+www.other.local:
+    type: CNAME
+    value: home.other.local
+test.other.local:
+    type: CNAME
+    value: home.test.local
 "#,
         )
         .await;
@@ -351,7 +357,9 @@ test.other.local: home.test.local
         write_file(
             &zone_3,
             r#"
-foo.baz.local: home.other.local
+foo.baz.local:
+    type: CNAME
+    value: home.other.local
 "#,
         )
         .await;

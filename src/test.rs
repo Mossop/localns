@@ -693,15 +693,11 @@ sources:
         assert_eq!(response.response_code(), ResponseCode::NoError);
         let mut answers = response.answers().to_vec();
         answers.sort();
-        assert_eq!(answers.len(), 2);
+        assert_eq!(answers.len(), 1);
 
         let answer = answers.first().unwrap();
-        assert_eq!(answer.name(), &name("traefik.home.local."));
-        assert_eq!(answer.data().unwrap(), &rdata_a("127.0.0.1"));
-
-        let answer = answers.get(1).unwrap();
         assert_eq!(answer.name(), &name("test.example.org."));
-        assert_eq!(answer.data().unwrap(), &rdata_cname("traefik.home.local"));
+        assert_eq!(answer.data().unwrap(), &rdata_a("127.0.0.1"));
 
         server.shutdown().await;
     }

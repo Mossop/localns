@@ -1,1 +1,3 @@
-rotty.example.org: www.example.org
+rotty.example.org:
+  type: CNAME
+  value: www.example.org

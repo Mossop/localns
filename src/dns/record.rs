@@ -84,7 +84,7 @@ impl TryFrom<&str> for RData {
             Ok(ip) => Ok(ip.into()),
             Err(_) => {
                 let fqdn = Fqdn::try_from(s)?;
-                Ok(RData::Cname(fqdn))
+                Ok(RData::Aname(fqdn))
             }
         }
     }

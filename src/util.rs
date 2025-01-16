@@ -1,7 +1,7 @@
 use std::{
     fmt::{self, Display},
     hash::Hash,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     str::FromStr,
 };
 
@@ -46,10 +46,8 @@ impl TryFrom<String> for Address {
                 port: Some(addr.port()),
             }),
             Err(e) => {
-                if let Ok(ip) = host.parse::<Ipv4Addr>() {
-                    Ok(Host::from(ip).into())
-                } else if let Ok(ip) = host.parse::<Ipv6Addr>() {
-                    Ok(Host::from(ip).into())
+                if let Ok(ip) = host.parse::<Host>() {
+                    Ok(ip.into())
                 } else {
                     Err(e)
                 }

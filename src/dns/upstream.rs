@@ -12,7 +12,7 @@ use tracing::{instrument, Span};
 
 use crate::{dns::query::QueryState, util::Address, Error};
 
-type UpstreamConfig = Address;
+pub(crate) type UpstreamConfig = Address;
 
 async fn connect_client(address: SocketAddr) -> Result<AsyncClient, Error> {
     let stream = UdpClientStream::<UdpSocket>::new(address);

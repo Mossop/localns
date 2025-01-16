@@ -142,7 +142,9 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
                         query_state.aliases.insert(name.clone(), fqdn.name());
                         None
                     } else {
-                        // Add this record as a CNAME to allow resolution of the alias.
+                        // Add this record as a CNAME to allow name resolution
+                        // to work. This will also cause an unknown to be added
+                        // for lookup.
                         Some(rr::Record::from_rdata(
                             name.clone(),
                             record.ttl.unwrap_or(config.ttl),
@@ -282,6 +284,8 @@ impl DnsServer {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use hickory_server::proto::{
         op::{Query, ResponseCode},
         rr::{DNSClass, RecordType},
@@ -289,8 +293,9 @@ mod tests {
 
     use crate::{
         config::{ZoneConfig, ZoneConfigProvider},
-        dns::{query::QueryState, Fqdn, RData, Record, RecordSet, ServerState},
-        test::{fqdn, name, rdata_a, rdata_aaaa, rdata_cname},
+        dns::{query::QueryState, Fqdn, RData, Record, RecordSet, ServerState, Upstream},
+        test::{coredns_container, fqdn, name, rdata_a, rdata_aaaa, rdata_cname},
+        util::{Address, Host},
     };
 
     #[derive(Clone)]
@@ -299,6 +304,22 @@ mod tests {
     impl ZoneConfigProvider for EmptyZones {
         fn zone_config(&self, _: &Fqdn) -> ZoneConfig {
             Default::default()
+        }
+    }
+
+    #[derive(Clone)]
+    struct ZoneWithUpstream {
+        upstream: Upstream,
+    }
+
+    impl ZoneConfigProvider for ZoneWithUpstream {
+        fn zone_config(&self, _: &Fqdn) -> ZoneConfig {
+            ZoneConfig {
+                origin: None,
+                upstreams: [self.upstream.clone()].into(),
+                ttl: 300,
+                authoritative: true,
+            }
         }
     }
 
@@ -479,5 +500,82 @@ mod tests {
         let mut answers = query_state.answers().clone();
         answers.sort();
         assert_eq!(answers.len(), 0);
+    }
+
+    #[tracing_test::traced_test]
+    #[tokio::test]
+    async fn upstream_overrides() {
+        let coredns = coredns_container(
+            "example.org",
+            r#"
+$ORIGIN example.org.
+@   3600 IN	SOA sns.dns.icann.org. noc.dns.icann.org. 2024102601 7200 3600 1209600 3600
+    3600 IN NS a.iana-servers.net.
+    3600 IN NS b.iana-servers.net.
+
+www     IN A     10.10.10.5
+        IN AAAA  2001::1
+data    IN CNAME www
+other   IN A     10.5.3.2
+"#,
+        )
+        .await;
+
+        let upstream = Upstream::from(Address {
+            host: Host::from_str("127.0.0.1").unwrap(),
+            port: Some(coredns.get_udp_port(53).await),
+        });
+
+        let mut records = RecordSet::new();
+        records.insert(Record::new(
+            fqdn("alias.example.org."),
+            RData::Aname(fqdn("other.example.org.")),
+        ));
+        records.insert(Record::new(
+            fqdn("alias2.example.org."),
+            RData::Aname(fqdn("www.example.org.")),
+        ));
+        records.insert(Record::new(
+            fqdn("other.example.org."),
+            RData::A("100.230.45.23".parse().unwrap()),
+        ));
+
+        let server_state = ServerState::new(records, ZoneWithUpstream { upstream })
+            .locked()
+            .await;
+
+        let mut query_state = QueryState::new(
+            Query::query(name("alias.example.org."), RecordType::A),
+            true,
+        );
+        server_state.perform_query(&mut query_state).await;
+
+        assert_eq!(query_state.response_code, ResponseCode::NoError);
+        let mut answers = query_state.answers().clone();
+        answers.sort();
+        assert_eq!(answers.len(), 1);
+
+        let record = answers.first().unwrap();
+        assert_eq!(*record.name(), name("alias.example.org."));
+        assert_eq!(record.dns_class(), DNSClass::IN);
+        assert_eq!(record.record_type(), RecordType::A);
+        assert_eq!(*record.data().unwrap(), rdata_a("100.230.45.23"));
+
+        let mut query_state = QueryState::new(
+            Query::query(name("alias2.example.org."), RecordType::A),
+            true,
+        );
+        server_state.perform_query(&mut query_state).await;
+
+        assert_eq!(query_state.response_code, ResponseCode::NoError);
+        let mut answers = query_state.answers().clone();
+        answers.sort();
+        assert_eq!(answers.len(), 1);
+
+        let record = answers.first().unwrap();
+        assert_eq!(*record.name(), name("alias2.example.org."));
+        assert_eq!(record.dns_class(), DNSClass::IN);
+        assert_eq!(record.record_type(), RecordType::A);
+        assert_eq!(*record.data().unwrap(), rdata_a("10.10.10.5"));
     }
 }

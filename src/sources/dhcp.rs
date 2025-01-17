@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use figment::value::magic::RelativePathBuf;
 use serde::Deserialize;
 use tokio::fs::read_to_string;
-use tracing::instrument;
+use tracing::{instrument, Span};
 
 use crate::{
     dns::{Fqdn, RData, Record, RecordSet},
@@ -56,9 +56,9 @@ fn parse_dnsmasq(zone: &Fqdn, data: &str) -> RecordSet {
     records
 }
 
-#[instrument(fields(%source_id), )]
+#[instrument(name = "dnsmasq_parse", fields(%source_id, records))]
 async fn parse_file(source_id: &SourceId, zone: &Fqdn, lease_file: &Path) -> RecordSet {
-    tracing::trace!("Parsing dhcp lease file");
+    tracing::debug!("Parsing dhcp lease file");
 
     let data = match read_to_string(lease_file).await {
         Ok(s) => s,
@@ -68,7 +68,12 @@ async fn parse_file(source_id: &SourceId, zone: &Fqdn, lease_file: &Path) -> Rec
         }
     };
 
-    parse_dnsmasq(zone, &data)
+    let records = parse_dnsmasq(zone, &data);
+
+    let span = Span::current();
+    span.record("records", records.len());
+
+    records
 }
 
 struct SourceWatcher<S> {
@@ -93,13 +98,11 @@ impl SourceConfig for DhcpConfig {
         SourceType::Dhcp
     }
 
-    #[instrument(fields(%source_id), skip(self, server))]
     async fn spawn<S: RecordServer>(
         self,
         source_id: SourceId,
         server: &S,
     ) -> Result<SourceHandle<S>, Error> {
-        tracing::trace!("Adding source");
         let lease_file = self.lease_file.relative();
         let zone = self.zone.clone();
 

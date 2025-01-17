@@ -23,7 +23,7 @@ pub(crate) struct Handler {
 
 #[async_trait::async_trait]
 impl RequestHandler for Handler {
-    #[instrument(fields(
+    #[instrument(name = "handle_dns_request", fields(
         request.id = request.id(),
         request.protocol = %request.request_info().protocol,
         request.source_address = %request.request_info().src.ip(),

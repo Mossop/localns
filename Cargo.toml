@@ -33,6 +33,13 @@ uuid = { version = "1.11.1", features = ["v4", "serde"] }
 serde_plain = "1.0.2"
 anyhow = { version = "1.0.95", features = ["backtrace"] }
 sha2 = "0.10.8"
+tracing-opentelemetry = "0.28.0"
+opentelemetry_sdk = { version = "0.27.1", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27.0", features = [
+  "http-proto",
+  "reqwest-client",
+] }
+opentelemetry = "0.27.1"
 
 [dev-dependencies]
 tempfile = "^3.15.0"

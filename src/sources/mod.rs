@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_plain::derive_display_from_serialize;
 use tokio::task::JoinHandle;
-use tracing::warn;
+use tracing::{instrument, warn};
 use uuid::Uuid;
 
 use crate::{config::Config, dns::RecordSet, watcher::Watcher, Error, RecordServer, ServerId};
@@ -215,6 +215,7 @@ impl<S: RecordServer> Sources<S> {
         }
     }
 
+    #[instrument(skip(self, server, old_config))]
     pub(crate) async fn install_sources(
         &mut self,
         server: &S,

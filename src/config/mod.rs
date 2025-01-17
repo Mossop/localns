@@ -170,7 +170,7 @@ pub(crate) struct Config {
 }
 
 impl Config {
-    #[instrument(fields(config_file = %config_file.display()), err)]
+    #[instrument(name = "config_parse", fields(config_file = %config_file.display()), err)]
     pub(crate) fn from_file(config_file: &Path) -> Result<Config, Error> {
         tracing::info!("Reading configuration");
 

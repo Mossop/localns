@@ -11,6 +11,7 @@ use hickory_server::{
 };
 use serde::Deserialize;
 use tokio::{
+    join,
     net::{TcpListener, UdpSocket},
     sync::RwLock,
 };
@@ -101,11 +102,17 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
 
         let mut results = Vec::<SocketAddr>::new();
 
-        let query = Query::query(name.clone(), RecordType::A);
-        let mut query_state = QueryState::new(query, true);
-        self.perform_query(&mut query_state).await;
+        let mut ipv4_query_state = QueryState::new(Query::query(name.clone(), RecordType::A), true);
+        let mut ipv6_query_state =
+            QueryState::new(Query::query(name.clone(), RecordType::AAAA), true);
+
+        join!(
+            self.perform_query(&mut ipv4_query_state),
+            self.perform_query(&mut ipv6_query_state)
+        );
+
         results.extend(
-            query_state
+            ipv4_query_state
                 .resolve_name(&name)
                 .filter_map(|rdata| match rdata {
                     rr::RData::A(a) => Some(SocketAddr::new(a.0.into(), 0)),
@@ -113,11 +120,8 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
                 }),
         );
 
-        let query = Query::query(name.clone(), RecordType::AAAA);
-        let mut query_state = QueryState::new(query, true);
-        self.perform_query(&mut query_state).await;
         results.extend(
-            query_state
+            ipv6_query_state
                 .resolve_name(&name)
                 .filter_map(|rdata| match rdata {
                     rr::RData::AAAA(aaaa) => Some(SocketAddr::new(aaaa.0.into(), 0)),
@@ -128,10 +132,10 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
         Ok(results)
     }
 
-    async fn lookup_name(&self, name: &Name, query_state: &mut QueryState) {
+    #[instrument(fields(%name), skip(self, query_state))]
+    async fn resolve_name(&self, name: &Name, query_state: &mut QueryState) {
         let fqdn = Fqdn::from(name.clone());
         let config = self.zones.zone_config(&fqdn);
-        tracing::trace!(name = %name, config = ?config, "Looking up name");
 
         let records: Vec<rr::Record> = self
             .records
@@ -180,12 +184,12 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
 
     async fn lookup_names(&self, query_state: &mut QueryState) {
         while let Some(name) = query_state.next_unknown() {
-            self.lookup_name(&name, query_state).await;
+            self.resolve_name(&name, query_state).await;
         }
     }
 
     #[instrument(fields(
-        query = %query_state.query.name(),
+        name = %query_state.query.name(),
         qtype = query_state.query.query_type().to_string(),
         class = query_state.query.query_class().to_string(),
         request.response_code,

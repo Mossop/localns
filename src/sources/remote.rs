@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use reqwest::{Client, Url};
 use serde::{de::DeserializeOwned, Deserialize};
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
-use tracing::instrument;
+use tracing::{instrument, Span};
 
 use crate::{
     api::ApiRecords,
@@ -24,7 +24,7 @@ pub(crate) struct RemoteConfig {
     interval_ms: Option<u64>,
 }
 
-#[instrument(fields(%source_id, %base_url), skip(client))]
+#[instrument(name = "remote_api_call", fields(%source_id, %base_url), skip(client))]
 async fn api_call<T>(
     source_id: &SourceId,
     client: &Client,
@@ -54,6 +54,63 @@ where
     }
 }
 
+#[instrument(name = "remote_fetch_records", skip_all, fields(%source_id, records))]
+async fn fetch_records<S: RecordServer>(
+    source_id: &SourceId,
+    client: &Client,
+    remote_config: &RemoteConfig,
+    seen_sources: &Arc<Mutex<HashMap<SourceId, DateTime<Utc>>>>,
+    server: &S,
+    previous_sources: &mut HashMap<SourceId, DateTime<Utc>>,
+) -> LoopResult {
+    let api_records =
+        match api_call::<ApiRecords>(source_id, client, &remote_config.url, "v2/records").await {
+            Ok(r) => r,
+            Err(result) => {
+                {
+                    let _guard = server.start_batch_update().await;
+                    for (source_id, timestamp) in previous_sources.drain() {
+                        server.clear_source_records(&source_id, timestamp).await;
+                    }
+                }
+
+                seen_sources.lock().await.clear();
+
+                return result;
+            }
+        };
+
+    let mut record_count = 0;
+    let new_sources: HashMap<SourceId, DateTime<Utc>> = api_records
+        .source_records
+        .iter()
+        .map(|sr| (sr.source_id.clone(), sr.timestamp))
+        .collect();
+
+    {
+        let _guard = server.start_batch_update().await;
+        for (old_source, timestamp) in previous_sources.iter() {
+            if !new_sources.contains_key(old_source) {
+                server.clear_source_records(old_source, *timestamp).await;
+            }
+        }
+
+        for source_records in api_records.source_records {
+            record_count += source_records.records.len();
+
+            server.add_source_records(source_records).await;
+        }
+    }
+
+    *previous_sources = new_sources;
+    seen_sources.lock().await.clone_from(previous_sources);
+
+    let span = Span::current();
+    span.record("records", record_count);
+
+    LoopResult::Sleep
+}
+
 async fn remote_loop<S: RecordServer>(
     server: S,
     source_id: SourceId,
@@ -61,83 +118,42 @@ async fn remote_loop<S: RecordServer>(
     seen_sources: Arc<Mutex<HashMap<SourceId, DateTime<Utc>>>>,
 ) {
     let mut backoff = Backoff::new(remote_config.interval_ms.unwrap_or(POLL_INTERVAL_MS));
-
-    tracing::trace!(
-        %source_id,
-        url = %remote_config.url,
-        "Attempting to connect to remote server",
-    );
-
     let client = server.http_client();
 
-    let mut previous_sources: HashMap<SourceId, DateTime<Utc>> = HashMap::new();
-
     loop {
-        let api_records =
-            match api_call::<ApiRecords>(&source_id, &client, &remote_config.url, "v2/records")
-                .await
-            {
-                Ok(r) => {
-                    backoff.reset();
-                    r
-                }
-                Err(e) => {
-                    {
-                        let _guard = server.start_batch_update().await;
-                        for (source_id, timestamp) in previous_sources.drain() {
-                            server.clear_source_records(&source_id, timestamp).await;
-                        }
-                    }
-
-                    seen_sources.lock().await.clear();
-
-                    match e {
-                        LoopResult::Quit => {
-                            return;
-                        }
-                        LoopResult::Sleep => {
-                            backoff.reset();
-                        }
-                        LoopResult::Backoff => {
-                            backoff.backoff();
-                        }
-                    }
-
-                    sleep(backoff.duration()).await;
-                    continue;
-                }
-            };
-
-        let mut record_count = 0;
-        let old_sources = previous_sources;
-        previous_sources = api_records
-            .source_records
-            .iter()
-            .map(|sr| (sr.source_id.clone(), sr.timestamp))
-            .collect();
-
-        {
-            let _guard = server.start_batch_update().await;
-            for (old_source, timestamp) in old_sources {
-                if !previous_sources.contains_key(&old_source) {
-                    server.clear_source_records(&old_source, timestamp).await;
-                }
-            }
-
-            for source_records in api_records.source_records {
-                record_count += source_records.records.len();
-
-                server.add_source_records(source_records).await;
-            }
-        }
-
-        seen_sources.lock().await.clone_from(&previous_sources);
-
         tracing::trace!(
             %source_id,
-            record_count,
-            "Retrieved remote records",
+            url = %remote_config.url,
+            "Attempting to connect to remote server",
         );
+
+        let mut previous_sources: HashMap<SourceId, DateTime<Utc>> = HashMap::new();
+
+        loop {
+            match fetch_records(
+                &source_id,
+                &client,
+                &remote_config,
+                &seen_sources,
+                &server,
+                &mut previous_sources,
+            )
+            .await
+            {
+                LoopResult::Quit => {
+                    return;
+                }
+                LoopResult::Sleep => {
+                    backoff.reset();
+                }
+                LoopResult::Backoff => {
+                    backoff.backoff();
+                    break;
+                }
+            }
+
+            sleep(backoff.duration()).await;
+        }
 
         sleep(backoff.duration()).await;
     }
@@ -169,14 +185,11 @@ impl SourceConfig for RemoteConfig {
         SourceType::Remote
     }
 
-    #[instrument(fields(%source_id), skip(self, server))]
     async fn spawn<S: RecordServer>(
         self,
         source_id: SourceId,
         server: &S,
     ) -> Result<SourceHandle<S>, Error> {
-        tracing::trace!("Adding source");
-
         let seen_sources = Arc::new(Mutex::new(HashMap::new()));
 
         let handle = {
@@ -409,7 +422,6 @@ mod tests {
 
         assert!(records.is_empty());
 
-        tracing::trace!("Shutting down");
         api.shutdown().await;
     }
 }

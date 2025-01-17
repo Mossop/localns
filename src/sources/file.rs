@@ -8,7 +8,7 @@ use chrono::Utc;
 use figment::value::magic::RelativePathBuf;
 use hickory_server::proto::error::ProtoError;
 use serde::Deserialize;
-use tracing::instrument;
+use tracing::{instrument, Span};
 
 use crate::{
     dns::{Fqdn, RData, Record, RecordSet},
@@ -46,9 +46,9 @@ enum RDataOneOrMany {
 
 type ZoneFile = HashMap<Fqdn, RDataOneOrMany>;
 
-#[instrument(fields(%source_id), err)]
+#[instrument(name = "zonefile_parse", fields(%source_id, records), err)]
 fn parse_file(source_id: &SourceId, zone_file: &Path) -> Result<RecordSet, Error> {
-    tracing::trace!("Parsing zone file");
+    tracing::debug!("Parsing zone file");
 
     let f = File::open(zone_file)?;
     let zone_data: ZoneFile = serde_yaml::from_reader(f)?;
@@ -82,6 +82,9 @@ fn parse_file(source_id: &SourceId, zone_file: &Path) -> Result<RecordSet, Error
         }
     }
 
+    let span = Span::current();
+    span.record("records", records.len());
+
     Ok(records)
 }
 
@@ -114,13 +117,11 @@ impl SourceConfig for FileConfig {
         SourceType::File
     }
 
-    #[instrument(fields(%source_id), skip(self, server))]
     async fn spawn<S: RecordServer>(
         self,
         source_id: SourceId,
         server: &S,
     ) -> Result<SourceHandle<S>, Error> {
-        tracing::trace!("Adding source");
         let zone_file = self.relative();
 
         let watcher = watch(

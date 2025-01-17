@@ -71,7 +71,7 @@ async fn v2_records(app_data: web::Data<AppData>) -> impl Responder {
 }
 
 fn create_server(config: &ApiConfig, app_data: AppData) -> Option<(dev::Server, u16)> {
-    tracing::trace!(address = %config.address, "Starting API server");
+    tracing::debug!(address = %config.address, "Starting API server");
 
     let api_server = match HttpServer::new(move || {
         App::new()

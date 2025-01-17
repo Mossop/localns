@@ -24,13 +24,11 @@ where
 }
 
 pub(crate) struct Watcher {
-    path: PathBuf,
     handle: JoinHandle<()>,
 }
 
 impl Drop for Watcher {
     fn drop(&mut self) {
-        tracing::trace!(path = %self.path.display(), "Dropping file watcher");
         self.handle.abort();
     }
 }
@@ -102,10 +100,7 @@ pub(crate) async fn watch<L: WatchListener>(path: &Path, listener: L) -> Result<
         listener,
     ));
 
-    Ok(Watcher {
-        path: path.to_owned(),
-        handle,
-    })
+    Ok(Watcher { handle })
 }
 
 #[cfg(test)]

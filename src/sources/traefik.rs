@@ -4,11 +4,11 @@ use anyhow::bail;
 use reqwest::{Client, Url};
 use serde::{de::DeserializeOwned, Deserialize};
 use tokio::time::sleep;
-use tracing::instrument;
+use tracing::{instrument, Span};
 
 use crate::{
     config::deserialize_url,
-    dns::{Fqdn, RData, Record},
+    dns::{Fqdn, RData, Record, RecordSet},
     run_loop::{LoopResult, RunLoop},
     sources::{SourceConfig, SourceHandle, SourceId, SourceType},
     Error, RecordServer, SourceRecords,
@@ -39,7 +39,7 @@ struct ApiVersion {
     _code_name: String,
 }
 
-#[instrument(fields(%source_id, %base_url), skip(client))]
+#[instrument(name = "traefik_api_call", fields(%source_id, %base_url), skip(client))]
 async fn api_call<T>(
     source_id: &SourceId,
     client: &Client,
@@ -79,7 +79,7 @@ fn parse_hosts(rule: &str) -> Result<Vec<Fqdn>, Error> {
     Ok(hosts)
 }
 
-#[instrument]
+#[instrument(err)]
 fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, Error> {
     #[derive(Debug, PartialEq, Eq)]
     enum State {
@@ -152,11 +152,7 @@ fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, Error> {
     }
 }
 
-#[instrument(fields(%source_id), skip(routers))]
-fn generate_records<'a>(
-    source_id: &SourceId,
-    routers: &'a [ApiRouter],
-) -> impl Iterator<Item = Fqdn> + 'a {
+fn generate_records(routers: &[ApiRouter]) -> impl Iterator<Item = Fqdn> + '_ {
     routers
         .iter()
         .filter_map(|r| match parse_hosts(&r.rule) {
@@ -167,6 +163,33 @@ fn generate_records<'a>(
             }
         })
         .flatten()
+}
+
+#[instrument(name = "traefik_fetch_records", fields(%source_id, records), skip(client, traefik_config, target_name, rdata))]
+async fn fetch_records(
+    source_id: &SourceId,
+    client: &Client,
+    traefik_config: &TraefikConfig,
+    target_name: Option<&Fqdn>,
+    rdata: &RData,
+) -> Result<RecordSet, LoopResult> {
+    let routers =
+        api_call::<Vec<ApiRouter>>(source_id, client, &traefik_config.url, "http/routers").await?;
+
+    let records: RecordSet = generate_records(&routers)
+        .filter_map(|fqdn| {
+            if Some(&fqdn) == target_name {
+                None
+            } else {
+                Some(Record::new(fqdn, rdata.clone()))
+            }
+        })
+        .collect();
+
+    let span = Span::current();
+    span.record("records", records.len());
+
+    Ok(records)
 }
 
 async fn traefik_loop<S: RecordServer>(
@@ -214,27 +237,18 @@ async fn traefik_loop<S: RecordServer>(
     );
 
     loop {
-        let routers = match api_call::<Vec<ApiRouter>>(
+        let records = match fetch_records(
             &source_id,
             &client,
-            &traefik_config.url,
-            "http/routers",
+            &traefik_config,
+            target_name.as_ref(),
+            &rdata,
         )
         .await
         {
             Ok(r) => r,
             Err(result) => return result,
         };
-
-        let records = generate_records(&source_id, &routers)
-            .filter_map(|fqdn| {
-                if Some(&fqdn) == target_name.as_ref() {
-                    None
-                } else {
-                    Some(Record::new(fqdn, rdata.clone()))
-                }
-            })
-            .collect();
 
         server
             .add_source_records(SourceRecords::new(&source_id, None, records))
@@ -252,7 +266,6 @@ impl SourceConfig for TraefikConfig {
         SourceType::Traefik
     }
 
-    #[instrument(fields(%source_id), skip(self, server))]
     async fn spawn<S: RecordServer>(
         self,
         source_id: SourceId,

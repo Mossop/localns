@@ -21,6 +21,7 @@ pub use anyhow::Error;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use tokio::sync::Mutex;
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::{
@@ -150,6 +151,7 @@ impl WatchListener for ConfigWatcher {
 }
 
 impl Server {
+    #[instrument(name = "server_create")]
     pub async fn new(config_path: &Path) -> Result<Self, Error> {
         let config = Config::from_file(config_path)?;
 
@@ -217,6 +219,7 @@ impl Server {
         self.server_state.records.read().await.clone()
     }
 
+    #[instrument(name = "server_shutdown", skip(self))]
     pub async fn shutdown(self) {
         tracing::info!("Server shutting down");
 
@@ -237,6 +240,7 @@ impl Server {
         }
     }
 
+    #[instrument(skip(self))]
     async fn update_config(&self, config: Config) {
         let (restart_server, restart_api_server, old_config) = {
             let mut inner = self.inner.lock().await;

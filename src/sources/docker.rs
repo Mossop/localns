@@ -11,7 +11,7 @@ use bollard::{models, Docker, API_DEFAULT_VERSION};
 use figment::value::magic::RelativePathBuf;
 use futures::StreamExt;
 use serde::Deserialize;
-use tracing::instrument;
+use tracing::{instrument, Span};
 
 use crate::{
     dns::{Fqdn, RData, Record, RecordSet},
@@ -143,7 +143,7 @@ fn useful_event(ev: &models::EventMessage) -> bool {
     matches!(ev.typ, Some(models::EventMessageTypeEnum::CONTAINER))
 }
 
-#[instrument(fields(%source_id), skip(docker_config))]
+#[instrument(name = "docker_connect", fields(%source_id), skip(docker_config), err)]
 fn connect(source_id: &SourceId, docker_config: &DockerConfig) -> Result<Docker, Error> {
     let docker = match docker_config {
         DockerConfig::Address(address) => {
@@ -235,7 +235,7 @@ fn visible_networks(state: &DockerState) -> HashSet<String> {
         .collect()
 }
 
-#[instrument(fields(%source_id), skip(state))]
+#[instrument(name = "docker_generate_records", fields(%source_id, records), skip(state))]
 fn generate_records(source_id: &SourceId, state: DockerState) -> RecordSet {
     let mut records = RecordSet::new();
 
@@ -300,6 +300,9 @@ fn generate_records(source_id: &SourceId, state: DockerState) -> RecordSet {
             }
         }
     }
+
+    let span = Span::current();
+    span.record("records", records.len());
 
     records
 }
@@ -379,14 +382,11 @@ impl SourceConfig for DockerConfig {
         SourceType::Docker
     }
 
-    #[instrument(fields(%source_id), skip(self, server))]
     async fn spawn<S: RecordServer>(
         self,
         source_id: SourceId,
         server: &S,
     ) -> Result<SourceHandle<S>, Error> {
-        tracing::trace!("Adding source");
-
         let handle = {
             let backoff = RunLoop::new(5000);
             let config = self.clone();

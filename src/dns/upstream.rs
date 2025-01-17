@@ -43,12 +43,12 @@ impl From<UpstreamConfig> for Upstream {
 }
 
 impl Upstream {
-    #[instrument(fields(
-        lookup.upstream = %self.config,
-        lookup.name = %name,
-        lookup.query_class = %query_class,
-        lookup.query_type = %query_type,
-        lookup.response_code,
+    #[instrument(name = "upstream_resolve", fields(
+        upstream = %self.config,
+        name = %name,
+        query_class = %query_class,
+        query_type = %query_type,
+        response_code,
     ), skip_all)]
     async fn lookup(
         &self,

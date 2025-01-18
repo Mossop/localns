@@ -194,7 +194,7 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
         name = %query_state.query.name(),
         qtype = query_state.query.query_type().to_string(),
         class = query_state.query.query_class().to_string(),
-        request.response_code,
+        response_code,
     ), skip(self, query_state))]
     pub(crate) async fn perform_query(&self, query_state: &mut QueryState) {
         self.lookup_names(query_state).await;
@@ -220,7 +220,7 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
         }
 
         let span = Span::current();
-        span.record("request.response_code", query_state.response_code.to_str());
+        span.record("response_code", query_state.response_code.to_str());
     }
 }
 

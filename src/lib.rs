@@ -21,7 +21,7 @@ pub use anyhow::Error;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use tokio::sync::Mutex;
-use tracing::instrument;
+use tracing::{instrument, span, Instrument, Level};
 use uuid::Uuid;
 
 use crate::{
@@ -151,67 +151,70 @@ impl WatchListener for ConfigWatcher {
 }
 
 impl Server {
-    #[instrument(name = "server_create")]
-    pub async fn new(config_path: &Path) -> Result<Self, Error> {
-        let config = Config::from_file(config_path)?;
+    pub fn new(config_path: &Path) -> impl Future<Output = Result<Self, Error>> + '_ {
+        let span = span!(Level::TRACE, "server_create");
 
-        let server_state = ServerState::new(RecordSet::new(), config.zones.clone());
+        async move {
+            let config = Config::from_file(config_path)?;
 
-        let http_client = Client::builder()
-            .dns_resolver(Arc::new(server_state.clone()))
-            .build()?;
+            let server_state = ServerState::new(RecordSet::new(), config.zones.clone());
 
-        let sources = Sources::new();
-        let server_id = sources.server_id();
+            let http_client = Client::builder()
+                .dns_resolver(Arc::new(server_state.clone()))
+                .build()?;
 
-        let server = Self {
-            http_client,
-            batch_count: Default::default(),
-            server_id,
-            inner: Arc::new(Mutex::new(ServerInner {
-                config: config.clone(),
-                records: HashMap::new(),
-            })),
-            sources: Arc::new(Mutex::new(sources)),
-            dns_server: Arc::new(Mutex::new(
-                DnsServer::new(&config.server, server_state.clone()).await,
-            )),
-            server_state,
-            config_watcher: Default::default(),
-            api_server: Default::default(),
-        };
+            let sources = Sources::new();
+            let server_id = sources.server_id();
 
-        if let Some(api_server) = config
-            .api
-            .as_ref()
-            .and_then(|api_config| ApiServer::new(api_config, server_id, server.inner.clone()))
-        {
-            server.api_server.replace(api_server).await;
-        }
+            let server = Self {
+                http_client,
+                batch_count: Default::default(),
+                server_id,
+                inner: Arc::new(Mutex::new(ServerInner {
+                    config: config.clone(),
+                    records: HashMap::new(),
+                })),
+                sources: Arc::new(Mutex::new(sources)),
+                dns_server: Arc::new(Mutex::new(
+                    DnsServer::new(&config.server, server_state.clone()).await,
+                )),
+                server_state,
+                config_watcher: Default::default(),
+                api_server: Default::default(),
+            };
 
-        {
-            let mut sources = server.sources.lock().await;
-            sources.install_sources(&server, config, None).await;
-        }
-
-        match watch(
-            config_path,
-            ConfigWatcher {
-                config_file: config_path.to_owned(),
-                server: server.clone(),
-            },
-        )
-        .await
-        {
-            Ok(watcher) => {
-                server.config_watcher.replace(watcher).await;
+            if let Some(api_server) = config
+                .api
+                .as_ref()
+                .and_then(|api_config| ApiServer::new(api_config, server_id, server.inner.clone()))
+            {
+                server.api_server.replace(api_server).await;
             }
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to set up file watcher, config changes will not be detected.");
-            }
-        }
 
-        Ok(server)
+            {
+                let mut sources = server.sources.lock().await;
+                sources.install_sources(&server, config, None).await;
+            }
+
+            match watch(
+                config_path,
+                ConfigWatcher {
+                    config_file: config_path.to_owned(),
+                    server: server.clone(),
+                },
+            )
+            .await
+            {
+                Ok(watcher) => {
+                    server.config_watcher.replace(watcher).await;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to set up file watcher, config changes will not be detected.");
+                }
+            }
+
+            Ok(server)
+        }.instrument(span)
     }
 
     #[cfg(test)]
@@ -240,44 +243,48 @@ impl Server {
         }
     }
 
-    #[instrument(skip(self))]
-    async fn update_config(&self, config: Config) {
-        let (restart_server, restart_api_server, old_config) = {
-            let mut inner = self.inner.lock().await;
+    fn update_config(&self, config: Config) -> impl Future<Output = ()> + '_ {
+        let span = span!(Level::TRACE, "update_config");
 
-            let restart_server = inner.config.server != config.server;
-            let restart_api_server = inner.config.api != config.api;
+        async move {
+            let (restart_server, restart_api_server, old_config) = {
+                let mut inner = self.inner.lock().await;
 
-            let mut old_config = config.clone();
-            mem::swap(&mut inner.config, &mut old_config);
-            self.server_state.replace_zones(config.zones.clone()).await;
+                let restart_server = inner.config.server != config.server;
+                let restart_api_server = inner.config.api != config.api;
 
-            (restart_server, restart_api_server, old_config)
-        };
+                let mut old_config = config.clone();
+                mem::swap(&mut inner.config, &mut old_config);
+                self.server_state.replace_zones(config.zones.clone()).await;
 
-        {
-            let mut sources = self.sources.lock().await;
-            sources
-                .install_sources(self, config.clone(), Some(&old_config))
-                .await;
-        }
+                (restart_server, restart_api_server, old_config)
+            };
 
-        if restart_server {
-            let mut dns_server = self.dns_server.lock().await;
-            dns_server.restart(&config.server).await;
-        }
-
-        if restart_api_server {
-            if let Some(old_server) = self.api_server.take().await {
-                old_server.shutdown().await;
+            {
+                let mut sources = self.sources.lock().await;
+                sources
+                    .install_sources(self, config.clone(), Some(&old_config))
+                    .await;
             }
 
-            if let Some(api_server) = config.api.as_ref().and_then(|api_config| {
-                ApiServer::new(api_config, self.server_id, self.inner.clone())
-            }) {
-                self.api_server.replace(api_server).await;
+            if restart_server {
+                let mut dns_server = self.dns_server.lock().await;
+                dns_server.restart(&config.server).await;
+            }
+
+            if restart_api_server {
+                if let Some(old_server) = self.api_server.take().await {
+                    old_server.shutdown().await;
+                }
+
+                if let Some(api_server) = config.api.as_ref().and_then(|api_config| {
+                    ApiServer::new(api_config, self.server_id, self.inner.clone())
+                }) {
+                    self.api_server.replace(api_server).await;
+                }
             }
         }
+        .instrument(span)
     }
 }
 

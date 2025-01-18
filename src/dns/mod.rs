@@ -137,10 +137,14 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
         let fqdn = Fqdn::from(name.clone());
         let config = self.zones.zone_config(&fqdn);
 
+        let mut needs_recursion = true;
+
         let records: Vec<rr::Record> = self
             .records
             .lookup(name, query_state.query_class(), query_state.query_type())
             .filter_map(|record| {
+                needs_recursion = false;
+
                 if let RData::Aname(fqdn) = record.rdata() {
                     if !query_state.resolve_aliases {
                         query_state.aliases.insert(name.clone(), fqdn.name());
@@ -171,11 +175,9 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
             if name == query_state.query.name() {
                 query_state.soa = config.soa();
             }
-
-            return;
         };
 
-        if query_state.recursion_desired {
+        if needs_recursion && query_state.recursion_desired {
             for upstream in &config.upstreams {
                 upstream.resolve(name, query_state).await;
             }
@@ -519,6 +521,7 @@ $ORIGIN example.org.
 
 www     IN A     10.10.10.5
         IN AAAA  2001::1
+alias   IN A     100.100.23.12
 data    IN CNAME www
 other   IN A     10.5.3.2
 "#,

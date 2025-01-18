@@ -95,7 +95,7 @@ impl<Z: Clone> ServerState<Z> {
 }
 
 impl<Z: ZoneConfigProvider> LockedServerState<Z> {
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     async fn resolve_http_address(&self, name: String) -> Result<Vec<SocketAddr>, Error> {
         let mut name = Name::from_str(&name)?;
         name.set_fqdn(true);
@@ -132,7 +132,7 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
         Ok(results)
     }
 
-    #[instrument(fields(%name), skip(self, query_state))]
+    #[instrument(level = "trace", fields(%name), skip(self, query_state))]
     async fn resolve_name(&self, name: &Name, query_state: &mut QueryState) {
         let fqdn = Fqdn::from(name.clone());
         let config = self.zones.zone_config(&fqdn);
@@ -188,7 +188,7 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
         }
     }
 
-    #[instrument(fields(
+    #[instrument(level = "trace", fields(
         name = %query_state.query.name(),
         qtype = query_state.query.query_type().to_string(),
         class = query_state.query.query_class().to_string(),

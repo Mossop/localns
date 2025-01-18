@@ -13,7 +13,7 @@ use opentelemetry_sdk::{
     propagation::TraceContextPropagator, runtime, trace::TracerProvider, Resource,
 };
 use tokio::signal;
-use tracing::{warn, Level};
+use tracing::Level;
 use tracing_subscriber::{
     filter::Targets, layer::SubscriberExt, util::SubscriberInitExt, Layer, Registry,
 };
@@ -55,7 +55,7 @@ fn init_logging() -> Result<Option<TracerProvider>, Error> {
         Ok(host) => Some(host),
         Err(VarError::NotPresent) => None,
         Err(e) => {
-            warn!("Invalid environment: {e}");
+            tracing::warn!("Invalid environment: {e}");
             None
         }
     };

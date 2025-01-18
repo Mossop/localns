@@ -36,7 +36,7 @@ impl Drop for Watcher {
 impl Watcher {
     async fn fetch_state(path: &Path) -> Option<[u8; 32]> {
         let mut file = File::open(path).await.ok()?;
-        let mut buffer = [0_u8; 65536];
+        let mut buffer = vec![0_u8; 65536];
 
         let mut hasher = Sha256::new();
 

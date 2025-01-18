@@ -56,7 +56,7 @@ fn parse_dnsmasq(zone: &Fqdn, data: &str) -> RecordSet {
     records
 }
 
-#[instrument(name = "dnsmasq_parse", fields(%source_id, records))]
+#[instrument(level = "debug", name = "dnsmasq_parse", fields(%source_id, records))]
 async fn parse_file(source_id: &SourceId, zone: &Fqdn, lease_file: &Path) -> RecordSet {
     tracing::debug!("Parsing dhcp lease file");
 

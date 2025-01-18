@@ -143,7 +143,7 @@ fn useful_event(ev: &models::EventMessage) -> bool {
     matches!(ev.typ, Some(models::EventMessageTypeEnum::CONTAINER))
 }
 
-#[instrument(name = "docker_connect", fields(%source_id), skip(docker_config), err)]
+#[instrument(level = "debug", name = "docker_connect", fields(%source_id), skip(docker_config), err)]
 fn connect(source_id: &SourceId, docker_config: &DockerConfig) -> Result<Docker, Error> {
     let docker = match docker_config {
         DockerConfig::Address(address) => {
@@ -235,7 +235,7 @@ fn visible_networks(state: &DockerState) -> HashSet<String> {
         .collect()
 }
 
-#[instrument(name = "docker_generate_records", fields(%source_id, records), skip(state))]
+#[instrument(level = "trace", name = "docker_generate_records", fields(%source_id, records), skip(state))]
 fn generate_records(source_id: &SourceId, state: DockerState) -> RecordSet {
     let mut records = RecordSet::new();
 

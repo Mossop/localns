@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_plain::derive_display_from_serialize;
 use tokio::task::JoinHandle;
-use tracing::{instrument, warn};
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::{config::Config, dns::RecordSet, watcher::Watcher, Error, RecordServer, ServerId};
@@ -68,7 +68,7 @@ impl<S: RecordServer> SourceHandle<S> {
 
 impl<S: RecordServer> Drop for SourceHandle<S> {
     fn drop(&mut self) {
-        warn!("Source handle was not correctly dropped.");
+        tracing::warn!("Source handle was not correctly dropped.");
         #[cfg(test)]
         panic!("Source handle was not correctly dropped.");
     }
@@ -183,6 +183,7 @@ impl<S: RecordServer> Sources<S> {
         }
     }
 
+    #[instrument(level = "debug", skip_all, fields(source_type = %C::source_type()))]
     async fn spawn_sources<C>(
         &mut self,
         sources: HashMap<String, C>,
@@ -215,7 +216,7 @@ impl<S: RecordServer> Sources<S> {
         }
     }
 
-    #[instrument(skip(self, server, old_config))]
+    #[instrument(level = "debug", skip_all)]
     pub(crate) async fn install_sources(
         &mut self,
         server: &S,

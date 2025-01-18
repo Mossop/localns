@@ -43,7 +43,7 @@ impl From<UpstreamConfig> for Upstream {
 }
 
 impl Upstream {
-    #[instrument(name = "upstream_resolve", fields(
+    #[instrument(level = "trace", name = "upstream_resolve", fields(
         upstream = %self.config,
         name = %name,
         query_class = %query_class,

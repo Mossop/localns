@@ -39,7 +39,7 @@ struct ApiVersion {
     _code_name: String,
 }
 
-#[instrument(name = "traefik_api_call", fields(%source_id, %base_url), skip(client))]
+#[instrument(level = "trace", name = "traefik_api_call", fields(%source_id, %base_url), skip(client))]
 async fn api_call<T>(
     source_id: &SourceId,
     client: &Client,
@@ -79,7 +79,7 @@ fn parse_hosts(rule: &str) -> Result<Vec<Fqdn>, Error> {
     Ok(hosts)
 }
 
-#[instrument(err)]
+#[instrument(level = "trace", err)]
 fn parse_single_host(rule: &str) -> Result<Vec<Fqdn>, Error> {
     #[derive(Debug, PartialEq, Eq)]
     enum State {
@@ -165,7 +165,7 @@ fn generate_records(routers: &[ApiRouter]) -> impl Iterator<Item = Fqdn> + '_ {
         .flatten()
 }
 
-#[instrument(name = "traefik_fetch_records", fields(%source_id, records), skip(client, traefik_config, target_name, rdata))]
+#[instrument(level = "trace" name = "traefik_fetch_records", fields(%source_id, records), skip(client, traefik_config, target_name, rdata))]
 async fn fetch_records(
     source_id: &SourceId,
     client: &Client,

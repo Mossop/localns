@@ -46,7 +46,7 @@ enum RDataOneOrMany {
 
 type ZoneFile = HashMap<Fqdn, RDataOneOrMany>;
 
-#[instrument(name = "zonefile_parse", fields(%source_id, records), err)]
+#[instrument(level = "debug", name = "zonefile_parse", fields(%source_id, records), err)]
 fn parse_file(source_id: &SourceId, zone_file: &Path) -> Result<RecordSet, Error> {
     tracing::debug!("Parsing zone file");
 

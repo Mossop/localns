@@ -24,7 +24,7 @@ pub(crate) struct RemoteConfig {
     interval_ms: Option<u64>,
 }
 
-#[instrument(name = "remote_api_call", fields(%source_id, %base_url), skip(client))]
+#[instrument(level = "trace", name = "remote_api_call", fields(%source_id, %base_url), skip(client))]
 async fn api_call<T>(
     source_id: &SourceId,
     client: &Client,
@@ -54,7 +54,7 @@ where
     }
 }
 
-#[instrument(name = "remote_fetch_records", skip_all, fields(%source_id, records))]
+#[instrument(level = "trace", name = "remote_fetch_records", skip_all, fields(%source_id, records))]
 async fn fetch_records<S: RecordServer>(
     source_id: &SourceId,
     client: &Client,

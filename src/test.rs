@@ -23,7 +23,6 @@ use tokio::{
     sync::{watch, Mutex},
     time,
 };
-use tracing::trace;
 
 use crate::{
     dns::{Fqdn, RecordSet},
@@ -214,7 +213,7 @@ impl RecordServer for MultiSourceServer {
     }
 
     async fn add_source_records(&self, new_records: SourceRecords) {
-        trace!(
+        tracing::trace!(
             source = %new_records.source_id,
             timestamp = %new_records.timestamp,
             "Adding source records"
@@ -230,7 +229,7 @@ impl RecordServer for MultiSourceServer {
     }
 
     async fn clear_source_records(&self, source_id: &SourceId, timestamp: DateTime<Utc>) {
-        trace!(
+        tracing::trace!(
             source = %source_id,
             timestamp = %timestamp,
             "Clearing source records"

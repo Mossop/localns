@@ -3,15 +3,15 @@ use std::{collections::HashMap, sync::Arc};
 use chrono::{DateTime, Utc};
 use reqwest::{Client, Url};
 use serde::{de::DeserializeOwned, Deserialize};
-use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
+use tokio::{sync::Mutex, time::sleep};
 use tracing::{instrument, Span};
 
 use crate::{
     api::ApiRecords,
     config::deserialize_url,
     run_loop::{Backoff, LoopResult},
-    sources::{SourceConfig, SourceHandle, SourceId, SourceType},
-    Error, RecordServer,
+    sources::{RecordStore, SourceConfig, SourceHandle, SourceId, SourceType},
+    Error,
 };
 
 const POLL_INTERVAL_MS: u64 = 15000;
@@ -55,24 +55,19 @@ where
 }
 
 #[instrument(level = "trace", name = "remote_fetch_records", skip_all, fields(%source_id, records))]
-async fn fetch_records<S: RecordServer>(
+async fn fetch_records(
     source_id: &SourceId,
     client: &Client,
     remote_config: &RemoteConfig,
     seen_sources: &Arc<Mutex<HashMap<SourceId, DateTime<Utc>>>>,
-    server: &S,
+    record_store: &RecordStore,
     previous_sources: &mut HashMap<SourceId, DateTime<Utc>>,
 ) -> LoopResult {
     let api_records =
         match api_call::<ApiRecords>(source_id, client, &remote_config.url, "v2/records").await {
             Ok(r) => r,
             Err(result) => {
-                {
-                    let _guard = server.start_batch_update().await;
-                    for (source_id, timestamp) in previous_sources.drain() {
-                        server.clear_source_records(&source_id, timestamp).await;
-                    }
-                }
+                record_store.clear_source_records(source_id).await;
 
                 seen_sources.lock().await.clear();
 
@@ -80,45 +75,38 @@ async fn fetch_records<S: RecordServer>(
             }
         };
 
-    let mut record_count = 0;
-    let new_sources: HashMap<SourceId, DateTime<Utc>> = api_records
-        .source_records
-        .iter()
-        .map(|sr| (sr.source_id.clone(), sr.timestamp))
-        .collect();
-
-    {
-        let _guard = server.start_batch_update().await;
-        for (old_source, timestamp) in previous_sources.iter() {
-            if !new_sources.contains_key(old_source) {
-                server.clear_source_records(old_source, *timestamp).await;
-            }
-        }
-
-        for source_records in api_records.source_records {
-            record_count += source_records.records.len();
-
-            server.add_source_records(source_records).await;
-        }
+    if previous_sources.is_empty() {
+        tracing::debug!(%source_id,
+            url = %remote_config.url,
+            version = api_records.server_version,
+            "Connected to remote server",
+        );
     }
 
-    *previous_sources = new_sources;
-    seen_sources.lock().await.clone_from(previous_sources);
+    let record_count: usize = api_records
+        .source_records
+        .iter()
+        .map(|sr| sr.records.len())
+        .sum();
 
     let span = Span::current();
     span.record("records", record_count);
 
+    record_store
+        .add_source_records(source_id, api_records.source_records)
+        .await;
+
     LoopResult::Sleep
 }
 
-async fn remote_loop<S: RecordServer>(
-    server: S,
+async fn remote_loop(
+    record_store: RecordStore,
+    client: Client,
     source_id: SourceId,
     remote_config: RemoteConfig,
     seen_sources: Arc<Mutex<HashMap<SourceId, DateTime<Utc>>>>,
 ) {
     let mut backoff = Backoff::new(remote_config.interval_ms.unwrap_or(POLL_INTERVAL_MS));
-    let client = server.http_client();
 
     loop {
         tracing::trace!(
@@ -135,7 +123,7 @@ async fn remote_loop<S: RecordServer>(
                 &client,
                 &remote_config,
                 &seen_sources,
-                &server,
+                &record_store,
                 &mut previous_sources,
             )
             .await
@@ -159,86 +147,66 @@ async fn remote_loop<S: RecordServer>(
     }
 }
 
-pub(super) struct RemoteRecords<S: RecordServer> {
-    server: S,
-    handle: JoinHandle<()>,
-    seen_sources: Arc<Mutex<HashMap<SourceId, DateTime<Utc>>>>,
-}
-
-impl<S: RecordServer> RemoteRecords<S> {
-    pub(super) async fn drop(&self) {
-        self.handle.abort();
-
-        let mut sources = self.seen_sources.lock().await;
-
-        let _guard = self.server.start_batch_update().await;
-        for (source_id, timestamp) in sources.drain() {
-            self.server
-                .clear_source_records(&source_id, timestamp)
-                .await;
-        }
-    }
-}
-
 impl SourceConfig for RemoteConfig {
     fn source_type() -> SourceType {
         SourceType::Remote
     }
 
-    async fn spawn<S: RecordServer>(
+    async fn spawn(
         self,
         source_id: SourceId,
-        server: &S,
-    ) -> Result<SourceHandle<S>, Error> {
+        record_store: &RecordStore,
+        client: &Client,
+    ) -> Result<SourceHandle, Error> {
         let seen_sources = Arc::new(Mutex::new(HashMap::new()));
 
         let handle = {
             let config = self.clone();
 
             tokio::spawn(remote_loop(
-                server.clone(),
+                record_store.clone(),
+                client.clone(),
                 source_id,
                 config.clone(),
                 seen_sources.clone(),
             ))
         };
 
-        Ok(RemoteRecords {
-            server: server.clone(),
-            handle,
-            seen_sources,
-        }
-        .into())
+        Ok(handle.into())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::HashMap,
         net::{Ipv4Addr, SocketAddr},
+        path::PathBuf,
         str::FromStr,
-        sync::Arc,
+        time::Duration,
     };
 
-    use chrono::Utc;
-    use tokio::sync::Mutex;
+    use hickory_client::rr::RecordType;
+    use reqwest::Client;
+    use tempfile::TempDir;
+    use tokio::time::sleep;
     use uuid::Uuid;
 
     use crate::{
         api::{ApiConfig, ApiServer},
-        config::Config,
         dns::{Fqdn, RData, Record, RecordSet},
-        sources::{remote::RemoteConfig, SourceConfig, SourceId, SourceRecords, SourceType},
-        test::{fqdn, name, MultiSourceServer},
-        ServerId, ServerInner,
+        sources::{remote::RemoteConfig, RecordStore, SourceConfig, SourceId, SourceType},
+        test::{
+            assert_single_response, fqdn, name, rdata_a, wait_for_missing_response,
+            wait_for_response, write_file,
+        },
+        Server, ServerId,
     };
 
-    fn build_records<const N: usize>(
-        inner: &mut ServerInner,
+    async fn build_records<const N: usize>(
+        record_store: &RecordStore,
         records: [(&SourceId, &[(Fqdn, RData)]); N],
     ) {
-        inner.records.clear();
+        record_store.prune_sources(&Default::default()).await;
 
         for (source_id, record_list) in records {
             let mut records = RecordSet::default();
@@ -246,13 +214,7 @@ mod tests {
                 records.insert(Record::new(fqdn.clone(), rdata.clone()));
             }
 
-            let source_records = SourceRecords {
-                source_id: source_id.clone(),
-                timestamp: Utc::now(),
-                records,
-            };
-
-            inner.records.insert(source_id.clone(), source_records);
+            record_store.add_source_records(source_id, records).await;
         }
     }
 
@@ -273,13 +235,10 @@ mod tests {
             source_name: "test2".to_string(),
         };
 
-        let mut inner = ServerInner {
-            config: Config::default(),
-            records: HashMap::new(),
-        };
+        let record_store = RecordStore::new();
 
         build_records(
-            &mut inner,
+            &record_store,
             [
                 (
                     &remote_source_1,
@@ -296,16 +255,16 @@ mod tests {
                     )],
                 ),
             ],
-        );
+        )
+        .await;
 
-        let server_inner = Arc::new(Mutex::new(inner));
         let api_config = ApiConfig {
             address: SocketAddr::new(Ipv4Addr::from_str("0.0.0.0").unwrap().into(), 0),
         };
 
-        let api = ApiServer::new(&api_config, local_server, server_inner.clone()).unwrap();
+        let api = ApiServer::new(&api_config, local_server, record_store.clone()).unwrap();
 
-        let mut test_server = MultiSourceServer::new();
+        let record_store = RecordStore::new();
 
         let source_id = SourceId {
             server_id: Uuid::new_v4(),
@@ -318,110 +277,339 @@ mod tests {
             interval_ms: Some(100),
         };
 
-        let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
+        let handle = config
+            .spawn(source_id.clone(), &record_store, &Client::new())
+            .await
+            .unwrap();
 
-        let records = test_server
+        let records = record_store
             .wait_for_records(|records| records.has_name(&name("www.test.local.")))
             .await;
 
         assert_eq!(records.len(), 2);
 
-        let records_1 = records.get(&remote_source_1).unwrap();
-        assert_eq!(records_1.len(), 1);
-        assert!(records_1.contains(
+        assert!(records.contains(
             &fqdn("www.test.local"),
             &RData::A("10.5.23.43".parse().unwrap())
         ));
 
-        let records_2 = records.get(&remote_source_2).unwrap();
-        assert_eq!(records_2.len(), 1);
-        assert!(records_2.contains(
+        assert!(records.contains(
             &fqdn("www.test.local"),
             &RData::A("10.4.2.4".parse().unwrap())
         ));
 
-        {
-            let mut inner = server_inner.lock().await;
-            build_records(
-                &mut inner,
-                [(
-                    &remote_source_1,
-                    &[
-                        (
-                            fqdn("www.test.local"),
-                            RData::A("10.5.23.43".parse().unwrap()),
-                        ),
-                        (
-                            fqdn("bob.test.local"),
-                            RData::Aaaa("fe80::1".parse().unwrap()),
-                        ),
-                    ],
-                )],
-            );
-        }
+        build_records(
+            &record_store,
+            [(
+                &remote_source_1,
+                &[
+                    (
+                        fqdn("www.test.local"),
+                        RData::A("10.5.23.43".parse().unwrap()),
+                    ),
+                    (
+                        fqdn("bob.test.local"),
+                        RData::Aaaa("fe80::1".parse().unwrap()),
+                    ),
+                ],
+            )],
+        )
+        .await;
 
-        let records = test_server
+        let records = record_store
             .wait_for_records(|records| records.has_name(&name("bob.test.local.")))
             .await;
 
-        assert_eq!(records.len(), 1);
+        assert_eq!(records.len(), 2);
 
-        let records_1 = records.get(&remote_source_1).unwrap();
-        assert_eq!(records_1.len(), 2);
-        assert!(records_1.contains(
+        assert!(records.contains(
             &fqdn("www.test.local"),
             &RData::A("10.5.23.43".parse().unwrap())
         ));
-        assert!(records_1.contains(
+        assert!(records.contains(
             &fqdn("bob.test.local"),
             &RData::Aaaa("fe80::1".parse().unwrap())
         ));
 
-        {
-            let mut inner = server_inner.lock().await;
-            build_records(
-                &mut inner,
-                [(
-                    &remote_source_1,
-                    &[
-                        (
-                            fqdn("www.test.local"),
-                            RData::A("10.10.2.41".parse().unwrap()),
-                        ),
-                        (
-                            fqdn("done.test.local"),
-                            RData::A("10.1.2.41".parse().unwrap()),
-                        ),
-                    ],
-                )],
-            );
-        }
+        build_records(
+            &record_store,
+            [(
+                &remote_source_1,
+                &[
+                    (
+                        fqdn("www.test.local"),
+                        RData::A("10.10.2.41".parse().unwrap()),
+                    ),
+                    (
+                        fqdn("done.test.local"),
+                        RData::A("10.1.2.41".parse().unwrap()),
+                    ),
+                ],
+            )],
+        )
+        .await;
 
-        let records = test_server
+        let records = record_store
             .wait_for_records(|records| records.has_name(&name("done.test.local.")))
             .await;
 
-        assert_eq!(records.len(), 1);
+        assert_eq!(records.len(), 2);
 
-        let records_1 = records.get(&remote_source_1).unwrap();
-        assert_eq!(records_1.len(), 2);
-        assert!(records_1.contains(
+        assert!(records.contains(
             &fqdn("www.test.local"),
             &RData::A("10.10.2.41".parse().unwrap())
         ));
-        assert!(records_1.contains(
+        assert!(records.contains(
             &fqdn("done.test.local"),
             &RData::A("10.1.2.41".parse().unwrap())
         ));
 
         handle.drop().await;
 
-        let records = test_server
-            .wait_for_state(|source_records| source_records.is_empty())
-            .await;
+        api.shutdown().await;
+    }
 
-        assert!(records.is_empty());
+    #[tracing_test::traced_test]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn broken_remotes() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_file = temp_dir.path().join("config.yml");
+
+        let test_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_resources")
+            .join("broken_remotes");
+
+        write_file(
+            &config_file,
+            format!(
+                r#"
+server:
+  port: 53533
+
+sources:
+  file:
+    file1: {}/file1.yml
+  remote:
+    remote1:
+      url: http://remote.home.local:8032/
+      interval_ms: 100
+"#,
+                test_dir.display()
+            ),
+        )
+        .await;
+
+        let server = Server::new(&config_file).await.unwrap();
+        let localns_address = "127.0.0.1:53533";
+
+        wait_for_response(localns_address, &name("test.home.local."), RecordType::A).await;
+
+        sleep(Duration::from_secs(1)).await;
+
+        assert_single_response(
+            localns_address,
+            &name("test.home.local."),
+            RecordType::A,
+            true,
+            Some(rdata_a("10.10.10.10")),
+        )
+        .await;
+
+        assert_single_response(
+            localns_address,
+            &name("provided.home.local."),
+            RecordType::A,
+            true,
+            None,
+        )
+        .await;
+
+        let record_store = RecordStore::new();
+
+        let remote_source = SourceId {
+            server_id: ServerId::new_v4(),
+            source_type: SourceType::Dhcp,
+            source_name: "test1".to_string(),
+        };
+
+        build_records(
+            &record_store,
+            [(
+                &remote_source,
+                &[(
+                    fqdn("provided.home.local"),
+                    RData::A("10.5.23.43".parse().unwrap()),
+                )],
+            )],
+        )
+        .await;
+
+        let api_config = ApiConfig {
+            address: SocketAddr::new(Ipv4Addr::from_str("0.0.0.0").unwrap().into(), 8032),
+        };
+
+        let api = ApiServer::new(&api_config, ServerId::new_v4(), record_store.clone()).unwrap();
+
+        wait_for_response(
+            localns_address,
+            &name("provided.home.local."),
+            RecordType::A,
+        )
+        .await;
+
+        assert_single_response(
+            localns_address,
+            &name("provided.home.local."),
+            RecordType::A,
+            true,
+            Some(rdata_a("10.5.23.43")),
+        )
+        .await;
+
+        assert_single_response(
+            localns_address,
+            &name("test.home.local."),
+            RecordType::A,
+            true,
+            Some(rdata_a("10.10.10.10")),
+        )
+        .await;
 
         api.shutdown().await;
+
+        wait_for_missing_response(
+            localns_address,
+            &name("provided.home.local."),
+            RecordType::A,
+        )
+        .await;
+
+        assert_single_response(
+            localns_address,
+            &name("test.home.local."),
+            RecordType::A,
+            true,
+            Some(rdata_a("10.10.10.10")),
+        )
+        .await;
+
+        let api = ApiServer::new(&api_config, ServerId::new_v4(), record_store.clone()).unwrap();
+
+        wait_for_response(
+            localns_address,
+            &name("provided.home.local."),
+            RecordType::A,
+        )
+        .await;
+
+        assert_single_response(
+            localns_address,
+            &name("test.home.local."),
+            RecordType::A,
+            true,
+            Some(rdata_a("10.10.10.10")),
+        )
+        .await;
+
+        assert_single_response(
+            localns_address,
+            &name("provided.home.local."),
+            RecordType::A,
+            true,
+            Some(rdata_a("10.5.23.43")),
+        )
+        .await;
+
+        api.shutdown().await;
+
+        server.shutdown().await;
+    }
+
+    #[tracing_test::traced_test]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remote_cycle() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_file_a = temp_dir.path().join("config_a.yml");
+        let config_file_b = temp_dir.path().join("config_b.yml");
+
+        let test_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_resources")
+            .join("remote_cycle");
+
+        write_file(
+            &config_file_a,
+            format!(
+                r#"
+server:
+  port: 5365
+
+api:
+  address: 127.0.0.1:8065
+
+sources:
+  file:
+    file1: {}/server_a.yml
+  remote:
+    remote1:
+      url: http://127.0.0.1:8066/
+      interval_ms: 100
+"#,
+                test_dir.display()
+            ),
+        )
+        .await;
+
+        let server_a = Server::new(&config_file_a).await.unwrap();
+        let server_a_address = "127.0.0.1:5365";
+
+        write_file(
+            &config_file_b,
+            format!(
+                r#"
+server:
+  port: 5366
+
+api:
+  address: 127.0.0.1:8066
+
+sources:
+  file:
+    file1: {}/server_b.yml
+  remote:
+    remote1:
+      url: http://127.0.0.1:8065/
+      interval_ms: 100
+"#,
+                test_dir.display()
+            ),
+        )
+        .await;
+
+        let server_b = Server::new(&config_file_b).await.unwrap();
+        let server_b_address = "127.0.0.1:5366";
+
+        // Both servers should contain both records.
+        wait_for_response(server_a_address, &name("host.servera.com."), RecordType::A).await;
+        wait_for_response(server_a_address, &name("host.serverb.com."), RecordType::A).await;
+        wait_for_response(server_b_address, &name("host.servera.com."), RecordType::A).await;
+        wait_for_response(server_b_address, &name("host.serverb.com."), RecordType::A).await;
+
+        server_b.shutdown().await;
+
+        // Server a should have lose the server b record.
+        wait_for_missing_response(server_a_address, &name("host.serverb.com."), RecordType::A)
+            .await;
+
+        // But should retain its own record.
+        assert_single_response(
+            server_a_address,
+            &name("host.servera.com."),
+            RecordType::A,
+            true,
+            Some(rdata_a("10.10.10.10")),
+        )
+        .await;
+
+        server_a.shutdown().await;
     }
 }

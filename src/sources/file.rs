@@ -4,17 +4,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::Utc;
 use figment::value::magic::RelativePathBuf;
 use hickory_server::proto::error::ProtoError;
+use reqwest::Client;
 use serde::Deserialize;
 use tracing::{instrument, Span};
 
 use crate::{
     dns::{Fqdn, RData, Record, RecordSet},
-    sources::{SourceConfig, SourceHandle, SourceId, SourceType},
+    sources::{RecordStore, SourceConfig, SourceHandle, SourceId, SourceType},
     watcher::{watch, FileEvent, WatchListener},
-    Error, RecordServer, SourceRecords,
+    Error,
 };
 
 pub(crate) type FileConfig = RelativePathBuf;
@@ -88,24 +88,24 @@ fn parse_file(source_id: &SourceId, zone_file: &Path) -> Result<RecordSet, Error
     Ok(records)
 }
 
-struct SourceWatcher<S> {
+struct SourceWatcher {
     source_id: SourceId,
     zone_file: PathBuf,
-    server: S,
+    record_store: RecordStore,
 }
 
-impl<S: RecordServer> WatchListener for SourceWatcher<S> {
+impl WatchListener for SourceWatcher {
     async fn event(&mut self, _: FileEvent) {
         match parse_file(&self.source_id, &self.zone_file) {
             Ok(records) => {
-                self.server
-                    .add_source_records(SourceRecords::new(&self.source_id, None, records))
+                self.record_store
+                    .add_source_records(&self.source_id, records)
                     .await
             }
             Err(e) => {
                 tracing::warn!(error=%e, "Failed to read zone file");
-                self.server
-                    .clear_source_records(&self.source_id, Utc::now())
+                self.record_store
+                    .clear_source_records(&self.source_id)
                     .await;
             }
         }
@@ -117,32 +117,29 @@ impl SourceConfig for FileConfig {
         SourceType::File
     }
 
-    async fn spawn<S: RecordServer>(
+    async fn spawn(
         self,
         source_id: SourceId,
-        server: &S,
-    ) -> Result<SourceHandle<S>, Error> {
+        record_store: &RecordStore,
+        _: &Client,
+    ) -> Result<SourceHandle, Error> {
         let zone_file = self.relative();
 
         let watcher = watch(
             &zone_file.clone(),
             SourceWatcher {
                 source_id: source_id.clone(),
-                server: server.clone(),
+                record_store: record_store.clone(),
                 zone_file: zone_file.clone(),
             },
         )
         .await?;
 
         match parse_file(&source_id, &zone_file) {
-            Ok(records) => {
-                server
-                    .add_source_records(SourceRecords::new(&source_id, None, records))
-                    .await
-            }
+            Ok(records) => record_store.add_source_records(&source_id, records).await,
             Err(e) => {
                 tracing::warn!(error=%e, "Failed to read zone file");
-                server.clear_source_records(&source_id, Utc::now()).await;
+                record_store.clear_source_records(&source_id).await;
             }
         }
 
@@ -157,14 +154,15 @@ mod tests {
         str::FromStr,
     };
 
+    use reqwest::Client;
     use tempfile::TempDir;
     use tokio::fs;
     use uuid::Uuid;
 
     use crate::{
         dns::RData,
-        sources::{file::FileConfig, SourceConfig, SourceId},
-        test::{fqdn, name, write_file, SingleSourceServer},
+        sources::{file::FileConfig, RecordStore, SourceConfig, SourceId},
+        test::{fqdn, name, write_file},
     };
 
     #[tracing_test::traced_test]
@@ -193,11 +191,14 @@ other.home.local: www.home.local
 
         let config = FileConfig::from(zone_file.as_path());
 
-        let mut test_server = SingleSourceServer::new(&source_id);
+        let record_store = RecordStore::new();
 
-        let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
+        let handle = config
+            .spawn(source_id.clone(), &record_store, &Client::new())
+            .await
+            .unwrap();
 
-        let records = test_server
+        let records = record_store
             .wait_for_records(|records| records.has_name(&name("www.home.local.")))
             .await;
 
@@ -226,7 +227,7 @@ www.home.local: 10.14.23.123
         )
         .await;
 
-        let records = test_server
+        let records = record_store
             .wait_for_records(|records| !records.has_name(&name("other.home.local.")))
             .await;
 
@@ -241,8 +242,9 @@ www.home.local: 10.14.23.123
 
         fs::remove_file(&zone_file).await.unwrap();
 
-        let records = test_server.wait_for_maybe_records(|o| o.is_none()).await;
-        assert_eq!(records, None);
+        record_store
+            .wait_for_records(|records| records.is_empty())
+            .await;
 
         handle.drop().await;
     }

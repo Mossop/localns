@@ -5,13 +5,19 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_plain::derive_display_from_serialize;
 use tokio::task::JoinHandle;
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::{config::Config, dns::RecordSet, watcher::Watcher, Error, RecordServer, ServerId};
+use crate::{
+    config::Config,
+    dns::{store::RecordStore, RecordSet},
+    watcher::Watcher,
+    Error, ServerId,
+};
 
 pub(crate) mod dhcp;
 pub(crate) mod docker;
@@ -22,51 +28,43 @@ pub(crate) mod traefik;
 trait SourceConfig: PartialEq {
     fn source_type() -> SourceType;
 
-    async fn spawn<S: RecordServer>(
+    async fn spawn(
         self,
         source_id: SourceId,
-        server: &S,
-    ) -> Result<SourceHandle<S>, Error>;
+        record_store: &RecordStore,
+        client: &Client,
+    ) -> Result<SourceHandle, Error>;
 }
 
-enum SourceHandle<S: RecordServer> {
+enum SourceHandle {
     Spawned(JoinHandle<()>),
     #[allow(dead_code)]
     Watcher(Watcher),
-    Remote(remote::RemoteRecords<S>),
 }
 
-impl<S: RecordServer> From<remote::RemoteRecords<S>> for SourceHandle<S> {
-    fn from(handle: remote::RemoteRecords<S>) -> Self {
-        SourceHandle::Remote(handle)
-    }
-}
-
-impl<S: RecordServer> From<JoinHandle<()>> for SourceHandle<S> {
+impl From<JoinHandle<()>> for SourceHandle {
     fn from(handle: JoinHandle<()>) -> Self {
         SourceHandle::Spawned(handle)
     }
 }
 
-impl<S: RecordServer> From<Watcher> for SourceHandle<S> {
+impl From<Watcher> for SourceHandle {
     fn from(watcher: Watcher) -> Self {
         SourceHandle::Watcher(watcher)
     }
 }
 
-impl<S: RecordServer> SourceHandle<S> {
-    async fn drop(mut self) {
-        match &mut self {
-            Self::Spawned(handle) => handle.abort(),
-            Self::Remote(records) => records.drop().await,
-            _ => {}
+impl SourceHandle {
+    async fn drop(self) {
+        if let Self::Spawned(handle) = &self {
+            handle.abort();
         }
 
         forget(self);
     }
 }
 
-impl<S: RecordServer> Drop for SourceHandle<S> {
+impl Drop for SourceHandle {
     fn drop(&mut self) {
         tracing::warn!("Source handle was not correctly dropped.");
         #[cfg(test)]
@@ -114,6 +112,10 @@ impl fmt::Display for SourceId {
     }
 }
 
+pub(crate) trait IntoSourceRecordSet {
+    fn into_source_record_set(self, source_id: &SourceId) -> Vec<SourceRecords>;
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct SourceRecords {
     pub(crate) source_id: SourceId,
@@ -121,17 +123,26 @@ pub(crate) struct SourceRecords {
     pub(crate) records: RecordSet,
 }
 
-impl SourceRecords {
-    pub(crate) fn new(
-        source_id: &SourceId,
-        timestamp: Option<DateTime<Utc>>,
-        records: RecordSet,
-    ) -> Self {
-        Self {
+impl IntoSourceRecordSet for SourceRecords {
+    fn into_source_record_set(self, _source_id: &SourceId) -> Vec<SourceRecords> {
+        vec![self]
+    }
+}
+
+impl IntoSourceRecordSet for RecordSet {
+    fn into_source_record_set(self, source_id: &SourceId) -> Vec<SourceRecords> {
+        SourceRecords {
             source_id: source_id.clone(),
-            timestamp: timestamp.unwrap_or_else(Utc::now),
-            records,
+            timestamp: Utc::now(),
+            records: self,
         }
+        .into_source_record_set(source_id)
+    }
+}
+
+impl IntoSourceRecordSet for Vec<SourceRecords> {
+    fn into_source_record_set(self, _source_id: &SourceId) -> Vec<SourceRecords> {
+        self
     }
 }
 
@@ -153,16 +164,20 @@ pub(crate) struct SourcesConfig {
     pub remote: HashMap<String, remote::RemoteConfig>,
 }
 
-pub(crate) struct Sources<S: RecordServer> {
+pub(crate) struct Sources {
     server_id: ServerId,
-    sources: HashMap<SourceId, SourceHandle<S>>,
+    sources: HashMap<SourceId, SourceHandle>,
+    record_store: RecordStore,
+    client: Client,
 }
 
-impl<S: RecordServer> Sources<S> {
-    pub(crate) fn new() -> Self {
+impl Sources {
+    pub(crate) fn new(record_store: RecordStore, client: Client) -> Self {
         Self {
             server_id: Uuid::new_v4(),
             sources: HashMap::new(),
+            record_store,
+            client,
         }
     }
 
@@ -188,7 +203,6 @@ impl<S: RecordServer> Sources<S> {
         &mut self,
         sources: HashMap<String, C>,
         old_sources: Option<&HashMap<String, C>>,
-        server: &S,
     ) where
         C: SourceConfig,
     {
@@ -198,13 +212,14 @@ impl<S: RecordServer> Sources<S> {
             let previous = old_sources.and_then(|c| c.get(&name));
 
             if Some(&source_config) != previous {
-                let _guard = server.start_batch_update().await;
-
                 if let Some(handle) = self.sources.remove(&source_id) {
                     handle.drop().await;
                 }
 
-                match source_config.spawn(source_id.clone(), server).await {
+                match source_config
+                    .spawn(source_id.clone(), &self.record_store, &self.client)
+                    .await
+                {
                     Ok(handle) => {
                         self.sources.insert(source_id, handle);
                     }
@@ -217,16 +232,9 @@ impl<S: RecordServer> Sources<S> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    pub(crate) async fn install_sources(
-        &mut self,
-        server: &S,
-        config: Config,
-        old_config: Option<&Config>,
-    ) {
+    pub(crate) async fn install_sources(&mut self, config: Config, old_config: Option<&Config>) {
         {
             // First enumerate the configured sources and drop those that are no longer present.
-            let _guard = server.start_batch_update().await;
-
             let mut seen_sources: HashSet<SourceId> = HashSet::new();
 
             self.list_sources(&config.sources.dhcp, &mut seen_sources)
@@ -247,50 +255,33 @@ impl<S: RecordServer> Sources<S> {
                 }
             }
 
-            server.prune_sources(&seen_sources).await;
+            self.record_store.prune_sources(&seen_sources).await;
         }
 
         // Now install the new sources.
 
         // DHCP is assumed to not need any additional resolution.
-        self.spawn_sources(
-            config.sources.dhcp,
-            old_config.map(|c| &c.sources.dhcp),
-            server,
-        )
-        .await;
+        self.spawn_sources(config.sources.dhcp, old_config.map(|c| &c.sources.dhcp))
+            .await;
 
         // File sources are assumed to not need any additional resolution.
-        self.spawn_sources(
-            config.sources.file,
-            old_config.map(|c| &c.sources.file),
-            server,
-        )
-        .await;
+        self.spawn_sources(config.sources.file, old_config.map(|c| &c.sources.file))
+            .await;
 
         // Docker hostname may depend on DHCP records above.
-        self.spawn_sources(
-            config.sources.docker,
-            old_config.map(|c| &c.sources.docker),
-            server,
-        )
-        .await;
+        self.spawn_sources(config.sources.docker, old_config.map(|c| &c.sources.docker))
+            .await;
 
         // Traefik hostname may depend on Docker or DHCP records.
         self.spawn_sources(
             config.sources.traefik,
             old_config.map(|c| &c.sources.traefik),
-            server,
         )
         .await;
 
         // Remote hostname may depend on anything.
-        self.spawn_sources(
-            config.sources.remote,
-            old_config.map(|c| &c.sources.remote),
-            server,
-        )
-        .await;
+        self.spawn_sources(config.sources.remote, old_config.map(|c| &c.sources.remote))
+            .await;
     }
 
     pub(crate) async fn shutdown(&mut self) {
@@ -304,13 +295,14 @@ impl<S: RecordServer> Sources<S> {
 mod tests {
     use std::{net::Ipv4Addr, str::FromStr};
 
+    use reqwest::Client;
     use tempfile::TempDir;
 
     use crate::{
         config::Config,
         dns::RData,
-        sources::{SourceId, SourceType, Sources},
-        test::{fqdn, name, write_file, MultiSourceServer},
+        sources::{RecordStore, Sources},
+        test::{fqdn, name, write_file},
     };
 
     #[tracing_test::traced_test]
@@ -366,27 +358,17 @@ foo.baz.local:
         )
         .await;
 
-        let mut sources = Sources::new();
-        let mut test_server = MultiSourceServer::new();
-
-        let source_id_1 = SourceId::new(&sources.server_id, SourceType::File, "test_file");
-        let source_id_2 = SourceId::new(&sources.server_id, SourceType::File, "other_file");
-        let source_id_3 = SourceId::new(&sources.server_id, SourceType::File, "new_file");
+        let record_store = RecordStore::new();
+        let mut sources = Sources::new(record_store.clone(), Client::new());
 
         let config_1 = Config::from_file(&config_file).unwrap();
 
-        sources
-            .install_sources(&test_server, config_1.clone(), None)
-            .await;
+        sources.install_sources(config_1.clone(), None).await;
 
-        let record_map = test_server
+        let records = record_store
             .wait_for_records(|records| records.has_name(&name("home.test.local.")))
             .await;
 
-        assert_eq!(record_map.len(), 1);
-        assert!(record_map.contains_key(&source_id_1));
-
-        let records = record_map.get(&source_id_1).unwrap();
         assert_eq!(records.len(), 2);
         assert!(records.contains(
             &fqdn("home.test.local"),
@@ -410,19 +392,15 @@ sources:
 
         let config_2 = Config::from_file(&config_file).unwrap();
         sources
-            .install_sources(&test_server, config_2.clone(), Some(&config_1))
+            .install_sources(config_2.clone(), Some(&config_1))
             .await;
 
-        let record_map = test_server
+        let records = record_store
             .wait_for_records(|records| records.has_name(&name("www.other.local.")))
             .await;
 
-        assert_eq!(record_map.len(), 2);
-        assert!(record_map.contains_key(&source_id_1));
-        assert!(record_map.contains_key(&source_id_2));
+        assert_eq!(records.len(), 5);
 
-        let records = record_map.get(&source_id_1).unwrap();
-        assert_eq!(records.len(), 2);
         assert!(records.contains(
             &fqdn("home.test.local"),
             &RData::A(Ipv4Addr::from_str("10.45.23.56").unwrap())
@@ -432,8 +410,6 @@ sources:
             &RData::Cname(fqdn("home.test.local"))
         ));
 
-        let records = record_map.get(&source_id_2).unwrap();
-        assert_eq!(records.len(), 3);
         assert!(records.contains(
             &fqdn("home.other.local"),
             &RData::A(Ipv4Addr::from_str("10.45.23.57").unwrap())
@@ -460,19 +436,15 @@ sources:
 
         let config_3 = Config::from_file(&config_file).unwrap();
         sources
-            .install_sources(&test_server, config_3.clone(), Some(&config_2))
+            .install_sources(config_3.clone(), Some(&config_2))
             .await;
 
-        let record_map = test_server
+        let records = record_store
             .wait_for_records(|records| records.has_name(&name("foo.baz.local.")))
             .await;
 
-        assert_eq!(record_map.len(), 2);
-        assert!(record_map.contains_key(&source_id_2));
-        assert!(record_map.contains_key(&source_id_3));
+        assert_eq!(records.len(), 4);
 
-        let records = record_map.get(&source_id_2).unwrap();
-        assert_eq!(records.len(), 3);
         assert!(records.contains(
             &fqdn("home.other.local"),
             &RData::A(Ipv4Addr::from_str("10.45.23.57").unwrap())
@@ -486,8 +458,6 @@ sources:
             &RData::Cname(fqdn("home.test.local"))
         ));
 
-        let records = record_map.get(&source_id_3).unwrap();
-        assert_eq!(records.len(), 1);
         assert!(records.contains(
             &fqdn("foo.baz.local"),
             &RData::Cname(fqdn("home.other.local"))
@@ -496,11 +466,11 @@ sources:
         write_file(&config_file, "").await;
         let config_4 = Config::from_file(&config_file).unwrap();
         sources
-            .install_sources(&test_server, config_4.clone(), Some(&config_3))
+            .install_sources(config_4.clone(), Some(&config_3))
             .await;
 
-        let state = test_server.wait_for_change().await;
-        assert!(state.is_empty());
-        assert!(sources.sources.is_empty());
+        record_store
+            .wait_for_records(|records| records.is_empty())
+            .await;
     }
 }

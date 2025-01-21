@@ -1,9 +1,8 @@
 use std::{cmp::min, future::Future, time::Duration};
 
-use chrono::Utc;
 use tokio::time::sleep;
 
-use crate::{sources::SourceId, RecordServer};
+use crate::{dns::store::RecordStore, sources::SourceId};
 
 pub(crate) enum LoopResult {
     Sleep,
@@ -55,23 +54,26 @@ impl RunLoop {
         }
     }
 
-    pub(crate) async fn run<S, F, C>(mut self, server: S, source_id: SourceId, mut cb: C)
-    where
-        S: RecordServer,
+    pub(crate) async fn run<F, C>(
+        mut self,
+        record_store: RecordStore,
+        source_id: SourceId,
+        mut cb: C,
+    ) where
         F: Future<Output = LoopResult>,
-        C: FnMut(S, SourceId) -> F,
+        C: FnMut(RecordStore, SourceId) -> F,
     {
         loop {
-            let result = cb(server.clone(), source_id.clone()).await;
+            let result = cb(record_store.clone(), source_id.clone()).await;
 
             match result {
                 LoopResult::Sleep => self.backoff.reset(),
                 LoopResult::Backoff => {
-                    server.clear_source_records(&source_id, Utc::now()).await;
+                    record_store.clear_source_records(&source_id).await;
                     self.backoff.backoff()
                 }
                 LoopResult::Quit => {
-                    server.clear_source_records(&source_id, Utc::now()).await;
+                    record_store.clear_source_records(&source_id).await;
                     return;
                 }
             };

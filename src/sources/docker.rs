@@ -10,15 +10,16 @@ use anyhow::{bail, Context};
 use bollard::{models, Docker, API_DEFAULT_VERSION};
 use figment::value::magic::RelativePathBuf;
 use futures::StreamExt;
+use reqwest::Client;
 use serde::Deserialize;
 use tracing::{instrument, Span};
 
 use crate::{
     dns::{Fqdn, RData, Record, RecordSet},
     run_loop::{LoopResult, RunLoop},
-    sources::{SourceConfig, SourceHandle, SourceId, SourceType},
+    sources::{RecordStore, SourceConfig, SourceHandle, SourceId, SourceType},
     util::Address,
-    Error, RecordServer, SourceRecords,
+    Error,
 };
 
 #[derive(Debug, PartialEq, Deserialize, Clone)]
@@ -307,8 +308,8 @@ fn generate_records(source_id: &SourceId, state: DockerState) -> RecordSet {
     records
 }
 
-async fn docker_loop<S: RecordServer>(
-    server: S,
+async fn docker_loop(
+    record_store: RecordStore,
     source_id: SourceId,
     docker_config: DockerConfig,
 ) -> LoopResult {
@@ -347,9 +348,7 @@ async fn docker_loop<S: RecordServer>(
     };
 
     let records = generate_records(&source_id, state);
-    server
-        .add_source_records(SourceRecords::new(&source_id, None, records))
-        .await;
+    record_store.add_source_records(&source_id, records).await;
 
     let mut events = docker.events::<&str>(None);
     loop {
@@ -365,9 +364,7 @@ async fn docker_loop<S: RecordServer>(
                     };
 
                     let records = generate_records(&source_id, state);
-                    server
-                        .add_source_records(SourceRecords::new(&source_id, None, records))
-                        .await;
+                    record_store.add_source_records(&source_id, records).await;
                 }
             }
             _ => {
@@ -382,17 +379,18 @@ impl SourceConfig for DockerConfig {
         SourceType::Docker
     }
 
-    async fn spawn<S: RecordServer>(
+    async fn spawn(
         self,
         source_id: SourceId,
-        server: &S,
-    ) -> Result<SourceHandle<S>, Error> {
+        record_store: &RecordStore,
+        _: &Client,
+    ) -> Result<SourceHandle, Error> {
         let handle = {
             let backoff = RunLoop::new(5000);
             let config = self.clone();
 
             tokio::spawn(
-                backoff.run(server.clone(), source_id, move |server, source_id| {
+                backoff.run(record_store.clone(), source_id, move |server, source_id| {
                     docker_loop(server, source_id, config.clone())
                 }),
             )
@@ -406,13 +404,14 @@ impl SourceConfig for DockerConfig {
 mod tests {
     use std::net::IpAddr;
 
+    use reqwest::Client;
     use testcontainers::{runners::AsyncRunner, GenericImage};
     use uuid::Uuid;
 
     use crate::{
         dns::RData,
-        sources::{docker::DockerConfig, SourceConfig, SourceId},
-        test::{fqdn, name, SingleSourceServer},
+        sources::{docker::DockerConfig, RecordStore, SourceConfig, SourceId},
+        test::{fqdn, name},
     };
 
     #[tracing_test::traced_test]
@@ -432,11 +431,14 @@ mod tests {
 
         let config = DockerConfig::Local {};
 
-        let mut test_server = SingleSourceServer::new(&source_id);
+        let record_store = RecordStore::new();
 
-        let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
+        let handle = config
+            .spawn(source_id.clone(), &record_store, &Client::new())
+            .await
+            .unwrap();
 
-        let records = test_server
+        let records = record_store
             .wait_for_records(|records| records.has_name(&name("test1.home.local.")))
             .await;
 
@@ -453,7 +455,7 @@ mod tests {
 
         test_container.rm().await.unwrap();
 
-        let records = test_server
+        let records = record_store
             .wait_for_records(|records| !records.has_name(&name("test1.home.local.")))
             .await;
 
@@ -465,7 +467,7 @@ mod tests {
             .unwrap();
         let ip = test_container.get_bridge_ip_address().await.unwrap();
 
-        let records = test_server
+        let records = record_store
             .wait_for_records(|records| records.has_name(&name("test1.home.local.")))
             .await;
 

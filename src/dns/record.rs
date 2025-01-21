@@ -344,7 +344,12 @@ impl RecordSet {
         count
     }
 
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
+        if self.records.is_empty() {
+            return true;
+        }
+
         for records in self.records.values() {
             if !records.is_empty() {
                 return false;

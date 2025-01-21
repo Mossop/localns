@@ -1,11 +1,14 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::net::SocketAddr;
 
 use actix_web::{dev, get, web, App, HttpServer, Responder};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 
-use crate::{dns::Record, sources::SourceRecords, ServerId, ServerInner};
+use crate::{
+    dns::{store::RecordStore, Record},
+    sources::SourceRecords,
+    ServerId,
+};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub(crate) struct ApiConfig {
@@ -15,28 +18,25 @@ pub(crate) struct ApiConfig {
 #[derive(Clone)]
 struct AppData {
     server_id: ServerId,
-    server_inner: Arc<Mutex<ServerInner>>,
+    record_store: RecordStore,
 }
 
 #[get("/records")]
 async fn records(app_data: web::Data<AppData>) -> impl Responder {
-    let records: Vec<Record> = {
-        app_data
-            .server_inner
-            .lock()
-            .await
-            .records
-            .values()
-            .filter_map(|source_records| {
-                if source_records.source_id.server_id == app_data.server_id {
-                    Some(source_records.records.clone())
-                } else {
-                    None
-                }
-            })
-            .flatten()
-            .collect()
-    };
+    let records: Vec<Record> = app_data
+        .record_store
+        .resolve_source_records()
+        .await
+        .into_iter()
+        .filter_map(|source_records| {
+            if source_records.source_id.server_id == app_data.server_id {
+                Some(source_records.records)
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .collect();
 
     web::Json(records)
 }
@@ -44,25 +44,18 @@ async fn records(app_data: web::Data<AppData>) -> impl Responder {
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApiRecords {
     pub(crate) server_id: ServerId,
+    pub(crate) server_version: String,
     pub(crate) timestamp: DateTime<Utc>,
     pub(crate) source_records: Vec<SourceRecords>,
 }
 
 #[get("/v2/records")]
 async fn v2_records(app_data: web::Data<AppData>) -> impl Responder {
-    let source_records = {
-        app_data
-            .server_inner
-            .lock()
-            .await
-            .records
-            .values()
-            .cloned()
-            .collect()
-    };
+    let source_records = app_data.record_store.resolve_source_records().await;
 
     let api_records = ApiRecords {
         server_id: app_data.server_id,
+        server_version: env!("CARGO_PKG_VERSION").to_string(),
         timestamp: Utc::now(),
         source_records,
     };
@@ -104,11 +97,11 @@ impl ApiServer {
     pub(crate) fn new(
         config: &ApiConfig,
         server_id: ServerId,
-        server_inner: Arc<Mutex<ServerInner>>,
+        record_store: RecordStore,
     ) -> Option<Self> {
         let data = AppData {
             server_id,
-            server_inner,
+            record_store,
         };
 
         create_server(config, data).map(|(api_server, _port)| {
@@ -123,7 +116,7 @@ impl ApiServer {
         })
     }
 
-    pub(crate) async fn shutdown(&self) {
-        self.api_server.stop(true).await;
+    pub(crate) async fn shutdown(self) {
+        self.api_server.stop(!cfg!(test)).await;
     }
 }

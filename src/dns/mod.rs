@@ -13,13 +13,14 @@ use serde::Deserialize;
 use tokio::{
     join,
     net::{TcpListener, UdpSocket},
-    sync::RwLock,
+    sync::{watch::Receiver, RwLock},
 };
 use tracing::{instrument, Span};
 
 mod handler;
 mod query;
 mod record;
+pub(crate) mod store;
 mod upstream;
 
 pub(crate) use record::{Fqdn, RData, Record, RecordSet};
@@ -39,7 +40,7 @@ pub(crate) struct ServerConfig {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ServerState<Z> {
-    pub(crate) records: Arc<RwLock<RecordSet>>,
+    pub(crate) receiver: Receiver<RecordSet>,
     pub(crate) zones: Arc<RwLock<Z>>,
 }
 
@@ -69,16 +70,11 @@ pub(crate) struct LockedServerState<Z> {
 }
 
 impl<Z: Clone> ServerState<Z> {
-    pub(crate) fn new(records: RecordSet, zones: Z) -> Self {
+    pub(crate) fn new(receiver: Receiver<RecordSet>, zones: Z) -> Self {
         Self {
-            records: Arc::new(RwLock::new(records)),
+            receiver,
             zones: Arc::new(RwLock::new(zones)),
         }
-    }
-
-    pub(crate) async fn replace_records(&self, records: RecordSet) {
-        let mut locked = self.records.write().await;
-        *locked = records;
     }
 
     pub(crate) async fn replace_zones(&self, zones: Z) {
@@ -88,7 +84,7 @@ impl<Z: Clone> ServerState<Z> {
 
     pub(crate) async fn locked(&self) -> LockedServerState<Z> {
         let zones = self.zones.read().await.clone();
-        let records = self.records.read().await.clone();
+        let records = self.receiver.borrow().clone();
 
         LockedServerState { zones, records }
     }
@@ -296,6 +292,7 @@ mod tests {
         op::{Query, ResponseCode},
         rr::{DNSClass, RecordType},
     };
+    use tokio::sync::watch::channel;
 
     use crate::{
         config::{ZoneConfig, ZoneConfigProvider},
@@ -338,12 +335,12 @@ mod tests {
             RData::Cname(fqdn("other.home.local.")),
         ));
 
+        let (_, receiver) = channel(records.clone());
+
         let query = Query::query(name("test.home.local."), RecordType::A);
 
         let mut query_state = QueryState::new(query.clone(), false);
-        let mut server_state = ServerState::new(records.clone(), EmptyZones {})
-            .locked()
-            .await;
+        let mut server_state = ServerState::new(receiver, EmptyZones {}).locked().await;
         server_state.perform_query(&mut query_state).await;
 
         assert_eq!(query_state.response_code, ResponseCode::NXDomain);
@@ -415,7 +412,9 @@ mod tests {
             RData::Aname(fqdn("unknown.home.local.")),
         ));
 
-        let server_state = ServerState::new(records, EmptyZones {}).locked().await;
+        let (_, receiver) = channel(records.clone());
+
+        let server_state = ServerState::new(receiver, EmptyZones {}).locked().await;
 
         let mut query_state = QueryState::new(
             Query::query(name("alias.home.local."), RecordType::A),
@@ -547,7 +546,9 @@ other   IN A     10.5.3.2
             RData::A("100.230.45.23".parse().unwrap()),
         ));
 
-        let server_state = ServerState::new(records, ZoneWithUpstream { upstream })
+        let (_, receiver) = channel(records.clone());
+
+        let server_state = ServerState::new(receiver, ZoneWithUpstream { upstream })
             .locked()
             .await;
 

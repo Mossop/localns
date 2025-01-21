@@ -8,7 +8,7 @@ _.python.venv = { path = ".venv", create = true }
 [tasks.build_test_containers]
 run = "scripts/build_containers.sh"
 sources = ["test_resources/containers/**/*"]
-outputs = ["test_resources/containers/.containers_built"]
+outputs = { auto = true }
 
 [tasks.kill_containers]
 run = "docker container ls -a -f 'label=localns.testcontainer=1' -q | xargs -r docker rm -f"

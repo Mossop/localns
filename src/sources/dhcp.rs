@@ -1,15 +1,16 @@
 use std::path::{Path, PathBuf};
 
 use figment::value::magic::RelativePathBuf;
+use reqwest::Client;
 use serde::Deserialize;
 use tokio::fs::read_to_string;
 use tracing::{instrument, Span};
 
 use crate::{
     dns::{Fqdn, RData, Record, RecordSet},
-    sources::{SourceConfig, SourceHandle, SourceId, SourceType},
+    sources::{RecordStore, SourceConfig, SourceHandle, SourceId, SourceType},
     watcher::{watch, FileEvent, WatchListener},
-    Error, RecordServer, SourceRecords,
+    Error,
 };
 
 #[derive(Debug, PartialEq, Deserialize, Clone)]
@@ -76,19 +77,19 @@ async fn parse_file(source_id: &SourceId, zone: &Fqdn, lease_file: &Path) -> Rec
     records
 }
 
-struct SourceWatcher<S> {
+struct SourceWatcher {
     source_id: SourceId,
     dhcp_config: DhcpConfig,
     lease_file: PathBuf,
-    server: S,
+    record_store: RecordStore,
 }
 
-impl<S: RecordServer> WatchListener for SourceWatcher<S> {
+impl WatchListener for SourceWatcher {
     async fn event(&mut self, _: FileEvent) {
         let records = parse_file(&self.source_id, &self.dhcp_config.zone, &self.lease_file).await;
 
-        self.server
-            .add_source_records(SourceRecords::new(&self.source_id, None, records))
+        self.record_store
+            .add_source_records(&self.source_id, records)
             .await
     }
 }
@@ -98,11 +99,12 @@ impl SourceConfig for DhcpConfig {
         SourceType::Dhcp
     }
 
-    async fn spawn<S: RecordServer>(
+    async fn spawn(
         self,
         source_id: SourceId,
-        server: &S,
-    ) -> Result<SourceHandle<S>, Error> {
+        record_store: &RecordStore,
+        _: &Client,
+    ) -> Result<SourceHandle, Error> {
         let lease_file = self.lease_file.relative();
         let zone = self.zone.clone();
 
@@ -110,19 +112,15 @@ impl SourceConfig for DhcpConfig {
             &lease_file.clone(),
             SourceWatcher {
                 source_id: source_id.clone(),
-                server: server.clone(),
+                record_store: record_store.clone(),
                 dhcp_config: self,
                 lease_file: lease_file.clone(),
             },
         )
         .await?;
 
-        server
-            .add_source_records(SourceRecords::new(
-                &source_id,
-                None,
-                parse_file(&source_id, &zone, &lease_file).await,
-            ))
+        record_store
+            .add_source_records(&source_id, parse_file(&source_id, &zone, &lease_file).await)
             .await;
 
         Ok(watcher.into())
@@ -136,13 +134,14 @@ mod tests {
         str::FromStr,
     };
 
+    use reqwest::Client;
     use tempfile::TempDir;
     use uuid::Uuid;
 
     use crate::{
         dns::RData,
-        sources::{dhcp::DhcpConfig, SourceConfig, SourceId},
-        test::{fqdn, name, write_file, SingleSourceServer},
+        sources::{dhcp::DhcpConfig, RecordStore, SourceConfig, SourceId},
+        test::{fqdn, name, write_file},
     };
 
     #[tracing_test::traced_test]
@@ -244,11 +243,14 @@ duid 00:01:00:01:2f:0e:bf:99:00:e2:69:3e:6c:0a
             zone: fqdn("home.local."),
         };
 
-        let mut test_server = SingleSourceServer::new(&source_id);
+        let record_store = RecordStore::new();
 
-        let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
+        let handle = config
+            .spawn(source_id.clone(), &record_store, &Client::new())
+            .await
+            .unwrap();
 
-        let records = test_server
+        let records = record_store
             .wait_for_records(|records| records.has_name(&name("caldigit.home.local.")))
             .await;
 
@@ -274,7 +276,7 @@ duid 00:01:00:01:2f:0e:bf:99:00:e2:69:3e:6c:0a
         )
         .await;
 
-        let records = test_server
+        let records = record_store
             .wait_for_records(|records| records.has_name(&name("other.home.local.")))
             .await;
 

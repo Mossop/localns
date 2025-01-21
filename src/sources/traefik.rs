@@ -10,8 +10,8 @@ use crate::{
     config::deserialize_url,
     dns::{Fqdn, RData, Record, RecordSet},
     run_loop::{LoopResult, RunLoop},
-    sources::{SourceConfig, SourceHandle, SourceId, SourceType},
-    Error, RecordServer, SourceRecords,
+    sources::{RecordStore, SourceConfig, SourceHandle, SourceId, SourceType},
+    Error,
 };
 
 const POLL_INTERVAL_MS: u64 = 15000;
@@ -192,8 +192,9 @@ async fn fetch_records(
     Ok(records)
 }
 
-async fn traefik_loop<S: RecordServer>(
-    server: S,
+async fn traefik_loop(
+    record_store: RecordStore,
+    client: Client,
     source_id: SourceId,
     traefik_config: TraefikConfig,
 ) -> LoopResult {
@@ -222,8 +223,6 @@ async fn traefik_loop<S: RecordServer>(
         "Attempting to connect to traefik API",
     );
 
-    let client = server.http_client();
-
     let version =
         match api_call::<ApiVersion>(&source_id, &client, &traefik_config.url, "version").await {
             Ok(r) => r,
@@ -250,9 +249,7 @@ async fn traefik_loop<S: RecordServer>(
             Err(result) => return result,
         };
 
-        server
-            .add_source_records(SourceRecords::new(&source_id, None, records))
-            .await;
+        record_store.add_source_records(&source_id, records).await;
 
         sleep(Duration::from_millis(
             traefik_config.interval_ms.unwrap_or(POLL_INTERVAL_MS),
@@ -266,20 +263,24 @@ impl SourceConfig for TraefikConfig {
         SourceType::Traefik
     }
 
-    async fn spawn<S: RecordServer>(
+    async fn spawn(
         self,
         source_id: SourceId,
-        server: &S,
-    ) -> Result<SourceHandle<S>, Error> {
+        record_store: &RecordStore,
+        client: &Client,
+    ) -> Result<SourceHandle, Error> {
         let handle = {
             let backoff = RunLoop::new(self.interval_ms.unwrap_or(POLL_INTERVAL_MS));
             let config = self.clone();
+            let client = client.clone();
 
-            tokio::spawn(
-                backoff.run(server.clone(), source_id, move |server, source_id| {
-                    traefik_loop(server, source_id, config.clone())
-                }),
-            )
+            tokio::spawn(backoff.run(
+                record_store.clone(),
+                source_id,
+                move |record_store, source_id| {
+                    traefik_loop(record_store, client.clone(), source_id, config.clone())
+                },
+            ))
         };
 
         Ok(handle.into())
@@ -288,12 +289,13 @@ impl SourceConfig for TraefikConfig {
 
 #[cfg(test)]
 mod tests {
+    use reqwest::Client;
     use uuid::Uuid;
 
     use crate::{
         dns::RData,
-        sources::{traefik::TraefikConfig, SourceConfig, SourceId},
-        test::{fqdn, name, traefik_container, SingleSourceServer},
+        sources::{traefik::TraefikConfig, RecordStore, SourceConfig, SourceId},
+        test::{fqdn, name, traefik_container},
     };
 
     #[tracing_test::traced_test]
@@ -376,9 +378,8 @@ mod tests {
     #[tracing_test::traced_test]
     #[tokio::test]
     async fn integration() {
-        let (handle, mut test_server) = {
-            let traefik = traefik_container(
-                r#"http:
+        let traefik = traefik_container(
+            r#"http:
   routers:
     test-router:
       entryPoints:
@@ -392,68 +393,74 @@ mod tests {
         servers:
         - url: http://foo.bar.com/
 "#,
-            )
-            .await;
-            let port = traefik.get_tcp_port(80).await;
+            None,
+        )
+        .await;
+        let port = traefik.get_tcp_port(80).await;
 
-            let source_id = SourceId {
-                server_id: Uuid::new_v4(),
-                source_type: TraefikConfig::source_type(),
-                source_name: "test".to_string(),
-            };
-
-            let config = TraefikConfig {
-                url: format!("http://localhost:{port}/api/").parse().unwrap(),
-                address: None,
-                interval_ms: Some(100),
-            };
-
-            let mut test_server = SingleSourceServer::new(&source_id);
-
-            let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
-
-            let records = test_server
-                .wait_for_records(|records| records.has_name(&name("test.example.org.")))
-                .await;
-
-            assert_eq!(records.len(), 1);
-
-            assert!(records.contains(&fqdn("test.example.org"), &RData::Aname(fqdn("localhost"))));
-
-            handle.drop().await;
-
-            let config = TraefikConfig {
-                url: format!("http://localhost:{port}/api/").parse().unwrap(),
-                address: Some(RData::A("10.10.15.23".parse().unwrap())),
-                interval_ms: Some(100),
-            };
-
-            let mut test_server = SingleSourceServer::new(&source_id);
-
-            let handle = config.spawn(source_id.clone(), &test_server).await.unwrap();
-
-            let records = test_server
-                .wait_for_records(|records| records.has_name(&name("test.example.org.")))
-                .await;
-
-            assert_eq!(records.len(), 2);
-
-            assert!(records.contains(
-                &fqdn("test.example.org"),
-                &RData::A("10.10.15.23".parse().unwrap())
-            ));
-
-            assert!(records.contains(
-                &fqdn("localhost"),
-                &RData::A("10.10.15.23".parse().unwrap())
-            ));
-
-            (handle, test_server)
+        let source_id = SourceId {
+            server_id: Uuid::new_v4(),
+            source_type: TraefikConfig::source_type(),
+            source_name: "test".to_string(),
         };
 
-        let records = test_server.wait_for_maybe_records(|o| o.is_none()).await;
+        let config = TraefikConfig {
+            url: format!("http://localhost:{port}/api/").parse().unwrap(),
+            address: None,
+            interval_ms: Some(100),
+        };
 
-        assert_eq!(records, None);
+        let record_store = RecordStore::new();
+
+        let handle = config
+            .spawn(source_id.clone(), &record_store, &Client::new())
+            .await
+            .unwrap();
+
+        let records = record_store
+            .wait_for_records(|records| records.has_name(&name("test.example.org.")))
+            .await;
+
+        assert_eq!(records.len(), 1);
+
+        assert!(records.contains(&fqdn("test.example.org"), &RData::Aname(fqdn("localhost"))));
+
+        handle.drop().await;
+
+        let config = TraefikConfig {
+            url: format!("http://localhost:{port}/api/").parse().unwrap(),
+            address: Some(RData::A("10.10.15.23".parse().unwrap())),
+            interval_ms: Some(100),
+        };
+
+        let record_store = RecordStore::new();
+
+        let handle = config
+            .spawn(source_id.clone(), &record_store, &Client::new())
+            .await
+            .unwrap();
+
+        let records = record_store
+            .wait_for_records(|records| records.has_name(&name("test.example.org.")))
+            .await;
+
+        assert_eq!(records.len(), 2);
+
+        assert!(records.contains(
+            &fqdn("test.example.org"),
+            &RData::A("10.10.15.23".parse().unwrap())
+        ));
+
+        assert!(records.contains(
+            &fqdn("localhost"),
+            &RData::A("10.10.15.23".parse().unwrap())
+        ));
+
+        drop(traefik);
+
+        record_store
+            .wait_for_records(|records| records.is_empty())
+            .await;
 
         handle.drop().await;
     }

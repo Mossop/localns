@@ -8,7 +8,7 @@ use std::{
     str::FromStr,
 };
 
-use anyhow::{anyhow, Error};
+use anyhow::Error;
 use hickory_server::proto::{
     error::ProtoError,
     rr::{self, rdata, DNSClass, IntoName, Name, RecordType},
@@ -31,7 +31,10 @@ impl RData {
     pub(crate) fn matches(&self, record_type: RecordType) -> bool {
         match self {
             RData::Cname(_) => true,
-            RData::Aname(_) => matches!(record_type, RecordType::A | RecordType::AAAA),
+            RData::Aname(_) => matches!(
+                record_type,
+                RecordType::A | RecordType::AAAA | RecordType::ANAME
+            ),
             RData::A(_) => record_type == RecordType::A,
             RData::Aaaa(_) => record_type == RecordType::AAAA,
             RData::Ptr(_) => record_type == RecordType::PTR,
@@ -48,9 +51,7 @@ impl TryInto<rr::RData> for RData {
             RData::Aaaa(ip) => Ok(rr::RData::AAAA(ip.into())),
             RData::Cname(name) => Ok(rr::RData::CNAME(rdata::CNAME(name.into()))),
             RData::Ptr(name) => Ok(rr::RData::PTR(rdata::PTR(name.into()))),
-            RData::Aname(_) => Err(anyhow!(
-                "ANAME records cannot be converted to DNS responses"
-            )),
+            RData::Aname(name) => Ok(rr::RData::ANAME(rdata::ANAME(name.into()))),
         }
     }
 }

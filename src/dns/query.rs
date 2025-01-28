@@ -125,7 +125,7 @@ impl QueryState {
 
     fn add_unknowns(&mut self, record: &rr::Record) {
         if let Some(rr::RData::CNAME(ref name)) = record.data() {
-            if !self.seen.contains(name) {
+            if self.query_type() != RecordType::CNAME && !self.seen.contains(name) {
                 self.seen.insert(name.0.clone());
                 self.unknowns.insert(name.0.clone());
             }

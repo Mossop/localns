@@ -141,22 +141,23 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
             .filter_map(|record| {
                 needs_recursion = false;
 
-                if let RData::Aname(fqdn) = record.rdata() {
-                    if !query_state.resolve_aliases {
-                        query_state.aliases.insert(name.clone(), fqdn.name());
-                        None
-                    } else {
-                        // Add this record as a CNAME to allow name resolution
-                        // to work. This will also cause an unknown to be added
-                        // for lookup.
-                        Some(rr::Record::from_rdata(
-                            name.clone(),
-                            record.ttl.unwrap_or(config.ttl),
-                            rr::RData::CNAME(rr::rdata::CNAME(fqdn.name())),
-                        ))
+                match record.rdata() {
+                    RData::Aname(fqdn) if query_state.query_type() != RecordType::ANAME => {
+                        if !query_state.resolve_aliases {
+                            query_state.aliases.insert(name.clone(), fqdn.name());
+                            None
+                        } else {
+                            // Add this record as a CNAME to allow name resolution
+                            // to work. This will also cause an unknown to be added
+                            // for lookup.
+                            Some(rr::Record::from_rdata(
+                                name.clone(),
+                                record.ttl.unwrap_or(config.ttl),
+                                rr::RData::CNAME(rr::rdata::CNAME(fqdn.name())),
+                            ))
+                        }
                     }
-                } else {
-                    record.raw(&config)
+                    _ => record.raw(&config),
                 }
             })
             .collect();
@@ -297,7 +298,7 @@ mod tests {
     use crate::{
         config::{ZoneConfig, ZoneConfigProvider},
         dns::{query::QueryState, Fqdn, RData, Record, RecordSet, ServerState, Upstream},
-        test::{coredns_container, fqdn, name, rdata_a, rdata_aaaa, rdata_cname},
+        test::{coredns_container, fqdn, name, rdata_a, rdata_aaaa, rdata_aname, rdata_cname},
         util::{Address, Host},
     };
 
@@ -494,6 +495,63 @@ mod tests {
             *record.data().unwrap(),
             rdata_aaaa("2a00:1450:4009:81e::200e")
         );
+
+        let mut query_state = QueryState::new(
+            Query::query(name("cname.home.local."), RecordType::CNAME),
+            false,
+        );
+        server_state.perform_query(&mut query_state).await;
+
+        assert_eq!(query_state.response_code, ResponseCode::NoError);
+        let mut answers = query_state.answers().clone();
+        answers.sort();
+        assert_eq!(answers.len(), 1);
+
+        let record = answers.first().unwrap();
+        assert_eq!(*record.name(), name("cname.home.local."));
+        assert_eq!(record.dns_class(), DNSClass::IN);
+        assert_eq!(record.record_type(), RecordType::CNAME);
+        assert_eq!(*record.data().unwrap(), rdata_cname("alias.home.local."));
+
+        let mut query_state = QueryState::new(
+            Query::query(name("alias.home.local."), RecordType::ANAME),
+            false,
+        );
+        server_state.perform_query(&mut query_state).await;
+
+        assert_eq!(query_state.response_code, ResponseCode::NoError);
+        let mut answers = query_state.answers().clone();
+        answers.sort();
+        assert_eq!(answers.len(), 1);
+
+        let record = answers.first().unwrap();
+        assert_eq!(*record.name(), name("alias.home.local."));
+        assert_eq!(record.dns_class(), DNSClass::IN);
+        assert_eq!(record.record_type(), RecordType::ANAME);
+        assert_eq!(*record.data().unwrap(), rdata_aname("target.home.local."));
+
+        let mut query_state = QueryState::new(
+            Query::query(name("cname.home.local."), RecordType::ANAME),
+            false,
+        );
+        server_state.perform_query(&mut query_state).await;
+
+        assert_eq!(query_state.response_code, ResponseCode::NoError);
+        let mut answers = query_state.answers().clone();
+        answers.sort();
+        assert_eq!(answers.len(), 2);
+
+        let record = answers.first().unwrap();
+        assert_eq!(*record.name(), name("alias.home.local."));
+        assert_eq!(record.dns_class(), DNSClass::IN);
+        assert_eq!(record.record_type(), RecordType::ANAME);
+        assert_eq!(*record.data().unwrap(), rdata_aname("target.home.local."));
+
+        let record = answers.get(1).unwrap();
+        assert_eq!(*record.name(), name("cname.home.local."));
+        assert_eq!(record.dns_class(), DNSClass::IN);
+        assert_eq!(record.record_type(), RecordType::CNAME);
+        assert_eq!(*record.data().unwrap(), rdata_cname("alias.home.local."));
 
         let mut query_state = QueryState::new(
             Query::query(name("badalias.home.local."), RecordType::AAAA),

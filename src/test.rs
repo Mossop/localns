@@ -78,6 +78,10 @@ pub(crate) fn rdata_cname(n: &str) -> RData {
     RData::CNAME(rdata::CNAME(name(n)))
 }
 
+pub(crate) fn rdata_aname(n: &str) -> RData {
+    RData::ANAME(rdata::ANAME(name(n)))
+}
+
 pub(crate) struct Container {
     _temp_dir: TempDir,
     container: ContainerAsync<GenericImage>,

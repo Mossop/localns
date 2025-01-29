@@ -157,7 +157,6 @@ mod tests {
     use reqwest::Client;
     use tempfile::TempDir;
     use tokio::fs;
-    use uuid::Uuid;
 
     use crate::{
         dns::RData,
@@ -183,11 +182,7 @@ other.home.local: www.home.local
         )
         .await;
 
-        let source_id = SourceId {
-            server_id: Uuid::new_v4(),
-            source_type: FileConfig::source_type(),
-            source_name: "test".to_string(),
-        };
+        let source_id = SourceId::new(FileConfig::source_type(), "test");
 
         let config = FileConfig::from(zone_file.as_path());
 

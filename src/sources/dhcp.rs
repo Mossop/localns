@@ -136,7 +136,6 @@ mod tests {
 
     use reqwest::Client;
     use tempfile::TempDir;
-    use uuid::Uuid;
 
     use crate::{
         dns::RData,
@@ -232,11 +231,7 @@ duid 00:01:00:01:2f:0e:bf:99:00:e2:69:3e:6c:0a
         )
         .await;
 
-        let source_id = SourceId {
-            server_id: Uuid::new_v4(),
-            source_type: DhcpConfig::source_type(),
-            source_name: "test".to_string(),
-        };
+        let source_id = SourceId::new(DhcpConfig::source_type(), "test");
 
         let config = DhcpConfig {
             lease_file: lease_file.as_path().into(),

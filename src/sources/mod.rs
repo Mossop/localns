@@ -4,7 +4,6 @@ use std::{
     mem::forget,
 };
 
-use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_plain::derive_display_from_serialize;
@@ -12,12 +11,7 @@ use tokio::task::JoinHandle;
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::{
-    config::Config,
-    dns::{store::RecordStore, RecordSet},
-    watcher::Watcher,
-    Error, ServerId,
-};
+use crate::{config::Config, dns::store::RecordStore, watcher::Watcher, Error, ServerId};
 
 pub(crate) mod dhcp;
 pub(crate) mod docker;
@@ -86,16 +80,13 @@ derive_display_from_serialize!(SourceType);
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct SourceId {
-    #[serde(with = "uuid::serde::braced")]
-    pub(crate) server_id: ServerId,
     pub(crate) source_type: SourceType,
     pub(crate) source_name: String,
 }
 
 impl SourceId {
-    pub(crate) fn new(server_id: &ServerId, source_type: SourceType, source_name: &str) -> Self {
+    pub(crate) fn new(source_type: SourceType, source_name: &str) -> Self {
         Self {
-            server_id: *server_id,
             source_type,
             source_name: source_name.to_owned(),
         }
@@ -104,45 +95,7 @@ impl SourceId {
 
 impl fmt::Display for SourceId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "[{},{},{}]",
-            self.server_id, self.source_type, self.source_name
-        )
-    }
-}
-
-pub(crate) trait IntoSourceRecordSet {
-    fn into_source_record_set(self, source_id: &SourceId) -> Vec<SourceRecords>;
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct SourceRecords {
-    pub(crate) source_id: SourceId,
-    pub(crate) timestamp: DateTime<Utc>,
-    pub(crate) records: RecordSet,
-}
-
-impl IntoSourceRecordSet for SourceRecords {
-    fn into_source_record_set(self, _source_id: &SourceId) -> Vec<SourceRecords> {
-        vec![self]
-    }
-}
-
-impl IntoSourceRecordSet for RecordSet {
-    fn into_source_record_set(self, source_id: &SourceId) -> Vec<SourceRecords> {
-        SourceRecords {
-            source_id: source_id.clone(),
-            timestamp: Utc::now(),
-            records: self,
-        }
-        .into_source_record_set(source_id)
-    }
-}
-
-impl IntoSourceRecordSet for Vec<SourceRecords> {
-    fn into_source_record_set(self, _source_id: &SourceId) -> Vec<SourceRecords> {
-        self
+        write!(f, "[{},{}]", self.source_type, self.source_name)
     }
 }
 
@@ -193,7 +146,7 @@ impl Sources {
         C: SourceConfig,
     {
         for name in sources.keys() {
-            let source_id = SourceId::new(&self.server_id, C::source_type(), name);
+            let source_id = SourceId::new(C::source_type(), name);
             seen_sources.insert(source_id.clone());
         }
     }
@@ -208,7 +161,7 @@ impl Sources {
     {
         for (name, source_config) in sources {
             tracing::debug!(name, source_type=%C::source_type(), "Adding source");
-            let source_id = SourceId::new(&self.server_id, C::source_type(), &name);
+            let source_id = SourceId::new(C::source_type(), &name);
             let previous = old_sources.and_then(|c| c.get(&name));
 
             if Some(&source_config) != previous {

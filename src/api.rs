@@ -1,12 +1,10 @@
 use std::net::SocketAddr;
 
 use actix_web::{dev, get, web, App, HttpServer, Responder};
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    dns::{store::RecordStore, Record},
-    sources::SourceRecords,
+    dns::store::{RecordStore, RecordStoreData},
     ServerId,
 };
 
@@ -21,43 +19,20 @@ struct AppData {
     record_store: RecordStore,
 }
 
-#[get("/records")]
-async fn records(app_data: web::Data<AppData>) -> impl Responder {
-    let records: Vec<Record> = app_data
-        .record_store
-        .resolve_source_records()
-        .await
-        .into_iter()
-        .filter_map(|source_records| {
-            if source_records.source_id.server_id == app_data.server_id {
-                Some(source_records.records)
-            } else {
-                None
-            }
-        })
-        .flatten()
-        .collect();
-
-    web::Json(records)
-}
-
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApiRecords {
     pub(crate) server_id: ServerId,
     pub(crate) server_version: String,
-    pub(crate) timestamp: DateTime<Utc>,
-    pub(crate) source_records: Vec<SourceRecords>,
+    #[serde(flatten)]
+    pub(crate) store: RecordStoreData,
 }
 
 #[get("/v2/records")]
 async fn v2_records(app_data: web::Data<AppData>) -> impl Responder {
-    let source_records = app_data.record_store.resolve_source_records().await;
-
     let api_records = ApiRecords {
         server_id: app_data.server_id,
         server_version: env!("CARGO_PKG_VERSION").to_string(),
-        timestamp: Utc::now(),
-        source_records,
+        store: app_data.record_store.store_data().await,
     };
 
     web::Json(api_records)
@@ -69,7 +44,6 @@ fn create_server(config: &ApiConfig, app_data: AppData) -> Option<(dev::Server, 
     let api_server = match HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(app_data.clone()))
-            .service(records)
             .service(v2_records)
     })
     .disable_signals()

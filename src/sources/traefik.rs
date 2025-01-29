@@ -290,7 +290,6 @@ impl SourceConfig for TraefikConfig {
 #[cfg(test)]
 mod tests {
     use reqwest::Client;
-    use uuid::Uuid;
 
     use crate::{
         dns::RData,
@@ -398,11 +397,7 @@ mod tests {
         .await;
         let port = traefik.get_tcp_port(80).await;
 
-        let source_id = SourceId {
-            server_id: Uuid::new_v4(),
-            source_type: TraefikConfig::source_type(),
-            source_name: "test".to_string(),
-        };
+        let source_id = SourceId::new(TraefikConfig::source_type(), "test");
 
         let config = TraefikConfig {
             url: format!("http://localhost:{port}/api/").parse().unwrap(),

@@ -406,7 +406,6 @@ mod tests {
 
     use reqwest::Client;
     use testcontainers::{runners::AsyncRunner, GenericImage};
-    use uuid::Uuid;
 
     use crate::{
         dns::RData,
@@ -423,11 +422,7 @@ mod tests {
             .unwrap();
         let ip = test_container.get_bridge_ip_address().await.unwrap();
 
-        let source_id = SourceId {
-            server_id: Uuid::new_v4(),
-            source_type: DockerConfig::source_type(),
-            source_name: "test".to_string(),
-        };
+        let source_id = SourceId::new(DockerConfig::source_type(), "test");
 
         let config = DockerConfig::Local {};
 

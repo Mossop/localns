@@ -64,7 +64,6 @@ impl<T> LockedOption<T> {
 
 #[derive(Clone)]
 pub struct Server {
-    server_id: ServerId,
     config: Arc<Mutex<Config>>,
     sources: Arc<Mutex<Sources>>,
     server_state: ServerState<Zones>,
@@ -103,10 +102,8 @@ impl Server {
             .build()?;
 
         let sources = Sources::new(record_store.clone(), http_client);
-        let server_id = sources.server_id();
 
         let server = Self {
-            server_id,
             config: Arc::new(Mutex::new(config.clone())),
             record_store: record_store.clone(),
             sources: Arc::new(Mutex::new(sources)),
@@ -121,7 +118,7 @@ impl Server {
         if let Some(api_server) = config
             .api
             .as_ref()
-            .and_then(|api_config| ApiServer::new(api_config, server_id, record_store))
+            .and_then(|api_config| ApiServer::new(api_config, record_store))
         {
             server.api_server.replace(api_server).await;
         }
@@ -204,9 +201,11 @@ impl Server {
                 old_server.shutdown().await;
             }
 
-            if let Some(api_server) = new_config.api.as_ref().and_then(|api_config| {
-                ApiServer::new(api_config, self.server_id, self.record_store.clone())
-            }) {
+            if let Some(api_server) = new_config
+                .api
+                .as_ref()
+                .and_then(|api_config| ApiServer::new(api_config, self.record_store.clone()))
+            {
                 self.api_server.replace(api_server).await;
             }
         }

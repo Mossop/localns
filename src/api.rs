@@ -3,10 +3,7 @@ use std::net::SocketAddr;
 use actix_web::{dev, get, web, App, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    dns::store::{RecordStore, RecordStoreData},
-    ServerId,
-};
+use crate::dns::store::{RecordStore, RecordStoreData};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub(crate) struct ApiConfig {
@@ -15,13 +12,11 @@ pub(crate) struct ApiConfig {
 
 #[derive(Clone)]
 struct AppData {
-    server_id: ServerId,
     record_store: RecordStore,
 }
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApiRecords {
-    pub(crate) server_id: ServerId,
     pub(crate) server_version: String,
     #[serde(flatten)]
     pub(crate) store: RecordStoreData,
@@ -30,7 +25,6 @@ pub(crate) struct ApiRecords {
 #[get("/v2/records")]
 async fn v2_records(app_data: web::Data<AppData>) -> impl Responder {
     let api_records = ApiRecords {
-        server_id: app_data.server_id,
         server_version: env!("CARGO_PKG_VERSION").to_string(),
         store: app_data.record_store.store_data().await,
     };
@@ -68,15 +62,8 @@ pub(crate) struct ApiServer {
 }
 
 impl ApiServer {
-    pub(crate) fn new(
-        config: &ApiConfig,
-        server_id: ServerId,
-        record_store: RecordStore,
-    ) -> Option<Self> {
-        let data = AppData {
-            server_id,
-            record_store,
-        };
+    pub(crate) fn new(config: &ApiConfig, record_store: RecordStore) -> Option<Self> {
+        let data = AppData { record_store };
 
         create_server(config, data).map(|(api_server, _port)| {
             let handle = api_server.handle();

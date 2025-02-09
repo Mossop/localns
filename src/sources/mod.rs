@@ -9,9 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_plain::derive_display_from_serialize;
 use tokio::task::JoinHandle;
 use tracing::instrument;
-use uuid::Uuid;
 
-use crate::{config::Config, dns::store::RecordStore, watcher::Watcher, Error, ServerId};
+use crate::{config::Config, dns::store::RecordStore, watcher::Watcher, Error};
 
 pub(crate) mod dhcp;
 pub(crate) mod docker;
@@ -118,7 +117,6 @@ pub(crate) struct SourcesConfig {
 }
 
 pub(crate) struct Sources {
-    server_id: ServerId,
     sources: HashMap<SourceId, SourceHandle>,
     record_store: RecordStore,
     client: Client,
@@ -127,15 +125,10 @@ pub(crate) struct Sources {
 impl Sources {
     pub(crate) fn new(record_store: RecordStore, client: Client) -> Self {
         Self {
-            server_id: Uuid::new_v4(),
             sources: HashMap::new(),
             record_store,
             client,
         }
-    }
-
-    pub(crate) fn server_id(&self) -> ServerId {
-        self.server_id
     }
 
     async fn list_sources<C>(

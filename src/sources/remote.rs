@@ -76,11 +76,11 @@ async fn fetch_records(
             }
         };
 
-    if let Some(old_server) = previous_server.replace(api_records.server_id) {
-        if old_server != api_records.server_id {
+    if let Some(old_server) = previous_server.replace(api_records.store.server_id) {
+        if old_server != api_records.store.server_id {
             tracing::debug!(%source_id,
                 url = %remote_config.url,
-                server_id = %api_records.server_id,
+                server_id = %api_records.store.server_id,
                 version = api_records.server_version,
                 "Connected to remote server",
             );
@@ -88,7 +88,7 @@ async fn fetch_records(
     } else {
         tracing::debug!(%source_id,
             url = %remote_config.url,
-            server_id = %api_records.server_id,
+            server_id = %api_records.store.server_id,
             version = api_records.server_version,
             "Connected to remote server",
         );
@@ -115,7 +115,7 @@ async fn fetch_records(
         expiry: max_expiry,
         records: api_records.store.local,
     };
-    remotes.insert(api_records.server_id, direct_remote);
+    remotes.insert(api_records.store.server_id, direct_remote);
 
     record_store.add_remote_records(remotes).await;
 
@@ -273,7 +273,6 @@ mod tests {
     #[tracing_test::traced_test]
     #[tokio::test(flavor = "multi_thread")]
     async fn integration() {
-        let remote_server_1 = ServerId::new_v4();
         let remote_source_1 = SourceId::new(SourceType::Dhcp, "test1");
 
         let remote_server_2 = ServerId::new_v4();
@@ -311,7 +310,7 @@ mod tests {
             address: SocketAddr::new(Ipv4Addr::from_str("0.0.0.0").unwrap().into(), 0),
         };
 
-        let api = ApiServer::new(&api_config, remote_server_1, api_record_store.clone()).unwrap();
+        let api = ApiServer::new(&api_config, api_record_store.clone()).unwrap();
 
         let record_store = RecordStore::new();
 
@@ -499,7 +498,7 @@ sources:
             address: SocketAddr::new(Ipv4Addr::from_str("0.0.0.0").unwrap().into(), 8032),
         };
 
-        let api = ApiServer::new(&api_config, ServerId::new_v4(), record_store.clone()).unwrap();
+        let api = ApiServer::new(&api_config, record_store.clone()).unwrap();
 
         wait_for_response(
             localns_address,
@@ -544,7 +543,7 @@ sources:
         )
         .await;
 
-        let api = ApiServer::new(&api_config, ServerId::new_v4(), record_store.clone()).unwrap();
+        let api = ApiServer::new(&api_config, record_store.clone()).unwrap();
 
         wait_for_response(
             localns_address,

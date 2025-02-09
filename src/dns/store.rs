@@ -132,6 +132,8 @@ pub(crate) struct RemoteServerRecords {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct RecordStoreData {
+    #[serde(with = "uuid::serde::braced")]
+    pub(crate) server_id: ServerId,
     #[serde(with = "serde::server_records")]
     pub(crate) local: ServerRecords,
     #[serde(with = "serde::remotes")]
@@ -146,6 +148,10 @@ impl RecordStoreData {
 
     fn add_remote_records(&mut self, remotes: HashMap<ServerId, RemoteServerRecords>) {
         for (server_id, rsr) in remotes.into_iter() {
+            if server_id == self.server_id {
+                continue;
+            }
+
             if let Some(existing) = self.remote.get_mut(&server_id) {
                 if existing.timestamp < rsr.timestamp {
                     *existing = rsr;
@@ -177,7 +183,11 @@ impl RecordStore {
         let (sender, _) = channel(RecordSet::new());
 
         Self {
-            store_data: Default::default(),
+            store_data: Arc::new(RwLock::new(RecordStoreData {
+                server_id: ServerId::new_v4(),
+                local: HashMap::new(),
+                remote: HashMap::new(),
+            })),
             sender,
         }
     }

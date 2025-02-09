@@ -18,12 +18,11 @@ mod serde {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub(super) mod server_records {
+        use super::*;
         use crate::{
             dns::{store::ServerRecords, RecordSet},
             sources::SourceId,
         };
-
-        use super::*;
 
         #[derive(Serialize)]
         struct SeRepr<'a> {
@@ -70,9 +69,8 @@ mod serde {
     pub(super) mod remotes {
         use std::collections::HashMap;
 
-        use crate::{dns::store::RemoteServerRecords, ServerId};
-
         use super::*;
+        use crate::{dns::store::RemoteServerRecords, ServerId};
 
         #[derive(Serialize)]
         struct SeRepr<'a> {

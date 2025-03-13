@@ -347,6 +347,30 @@ zones:
         compare_servers_all(
             localns_address,
             &core_address,
+            &name("www.example.org."),
+            RecordType::AAAA,
+        )
+        .await;
+
+        compare_servers_all(
+            localns_address,
+            &core_address,
+            &name("ipv4.example.org."),
+            RecordType::A,
+        )
+        .await;
+
+        compare_servers_all(
+            localns_address,
+            &core_address,
+            &name("ipv4.example.org."),
+            RecordType::AAAA,
+        )
+        .await;
+
+        compare_servers_all(
+            localns_address,
+            &core_address,
             &name("data.example.org."),
             RecordType::A,
         )
@@ -357,6 +381,78 @@ zones:
             &core_address,
             &name("bish.example.org."),
             RecordType::A,
+        )
+        .await;
+
+        compare_servers_all(
+            localns_address,
+            &core_address,
+            &name("bish.example.org."),
+            RecordType::AAAA,
+        )
+        .await;
+
+        compare_servers_all(
+            localns_address,
+            &core_address,
+            &name("bash.example.org."),
+            RecordType::A,
+        )
+        .await;
+
+        compare_servers_all(
+            localns_address,
+            &core_address,
+            &name("bash.example.org."),
+            RecordType::AAAA,
+        )
+        .await;
+
+        compare_servers_all(
+            localns_address,
+            &core_address,
+            &name("aname_1.example.org."),
+            RecordType::A,
+        )
+        .await;
+
+        compare_servers_all(
+            localns_address,
+            &core_address,
+            &name("aname_1.example.org."),
+            RecordType::AAAA,
+        )
+        .await;
+
+        compare_servers_all(
+            localns_address,
+            &core_address,
+            &name("aname_2.example.org."),
+            RecordType::A,
+        )
+        .await;
+
+        compare_servers_all(
+            localns_address,
+            &core_address,
+            &name("aname_2.example.org."),
+            RecordType::AAAA,
+        )
+        .await;
+
+        compare_servers_all(
+            localns_address,
+            &core_address,
+            &name("bad.example.org."),
+            RecordType::A,
+        )
+        .await;
+
+        compare_servers_all(
+            localns_address,
+            &core_address,
+            &name("bad.example.org."),
+            RecordType::AAAA,
         )
         .await;
 

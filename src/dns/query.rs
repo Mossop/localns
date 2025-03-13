@@ -137,10 +137,6 @@ impl QueryState {
             self.seen.insert(record.name().clone());
             self.unknowns.remove(record.name());
             self.add_unknowns(record);
-
-            if record.record_type() == self.query.query_type() {
-                self.response_code = ResponseCode::NoError;
-            }
         }
 
         self.answers.extend(records);

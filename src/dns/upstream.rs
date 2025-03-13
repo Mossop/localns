@@ -2,7 +2,7 @@ use std::{fmt, net::SocketAddr};
 
 use hickory_client::{
     client::{AsyncClient, ClientHandle},
-    op::DnsResponse,
+    op::{DnsResponse, ResponseCode},
     rr::{self, DNSClass, Name, RecordType},
     udp::UdpClientStream,
 };
@@ -105,6 +105,10 @@ impl Upstream {
 
                 query_state.name_servers.extend(name_servers);
                 query_state.soa = soa;
+            }
+
+            if query_state.response_code == ResponseCode::NXDomain {
+                query_state.response_code = message.response_code();
             }
         }
     }

@@ -1,9 +1,20 @@
 www.example.org:
   - 10.10.23.34
   - 1af2:cac:8e12:5b00::2
+ipv4.example.org:
+  - 10.10.2.1
 data.example.org:
   type: CNAME
   value: www.example.org
 bish.example.org:
   type: CNAME
   value: bosh.example.org
+bash.example.org:
+  type: CNAME
+  value: ipv4.example.org
+aname_1.example.org:
+  type: ANAME
+  value: www.example.org
+aname_2.example.org:
+  type: ANAME
+  value: ipv4.example.org

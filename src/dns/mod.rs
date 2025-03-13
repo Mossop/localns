@@ -4,7 +4,7 @@ use anyhow::Error;
 use futures::FutureExt;
 use hickory_server::{
     proto::{
-        op::Query,
+        op::{Query, ResponseCode},
         rr::{self, Name, RecordType},
     },
     ServerFuture,
@@ -134,12 +134,25 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
         let config = self.zones.zone_config(&fqdn);
 
         let mut needs_recursion = true;
+        let query_type = query_state.query_type();
 
         let records: Vec<rr::Record> = self
             .records
-            .lookup(name, query_state.query_class(), query_state.query_type())
+            .lookup(name, query_state.query_class(), query_type)
             .filter_map(|record| {
                 needs_recursion = false;
+
+                // If we have a final record then the name exists.
+                let record_type = record.rdata().record_type();
+                if record_type == query_type
+                    || matches!(record_type, RecordType::A | RecordType::AAAA)
+                {
+                    query_state.response_code = ResponseCode::NoError;
+                }
+
+                if !record.rdata().matches(query_type) {
+                    return None;
+                }
 
                 match record.rdata() {
                     RData::Aname(fqdn) if query_state.query_type() != RecordType::ANAME => {
@@ -199,6 +212,10 @@ impl<Z: ZoneConfigProvider> LockedServerState<Z> {
         if !query_state.aliases.is_empty() {
             let mut alias_query_state = query_state.for_aliases();
             self.lookup_names(&mut alias_query_state).await;
+
+            if query_state.response_code == ResponseCode::NXDomain {
+                query_state.response_code = alias_query_state.response_code;
+            }
 
             let mut records = Vec::new();
 

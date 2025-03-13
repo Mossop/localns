@@ -28,6 +28,16 @@ pub(crate) enum RData {
 }
 
 impl RData {
+    pub(crate) fn record_type(&self) -> RecordType {
+        match self {
+            RData::Cname(_) => RecordType::CNAME,
+            RData::Aname(_) => RecordType::ANAME,
+            RData::A(_) => RecordType::A,
+            RData::Aaaa(_) => RecordType::AAAA,
+            RData::Ptr(_) => RecordType::PTR,
+        }
+    }
+
     pub(crate) fn matches(&self, record_type: RecordType) -> bool {
         match self {
             RData::Cname(_) => true,
@@ -379,14 +389,17 @@ impl RecordSet {
                     .into_iter(),
             ),
             _ => match self.records.get(&name.clone().into()) {
-                Some(records) => Box::new(
-                    records
-                        .iter()
-                        .filter(move |record| record.rdata().matches(query_type))
-                        .cloned(),
-                ),
+                Some(records) => Box::new(records.iter().cloned()),
                 None => Box::new(empty()),
-            },
+            }, //  {
+               //     Some(records) => Box::new(
+               //         records
+               //             .iter()
+               //             .filter(move |record| record.rdata().matches(query_type))
+               //             .cloned(),
+               //     ),
+               //     None => Box::new(empty()),
+               // },
         }
     }
 }
